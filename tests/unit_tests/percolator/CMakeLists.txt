@@ -50,7 +50,7 @@ endif()
 # =============================
 # Find Boost
 # =============================
-find_package(Boost ${BOOST_MIN_VERSION} REQUIRED)
+find_package(Boost ${BOOST_MIN_VERSION} REQUIRED COMPONENTS filesystem system)
 add_definitions(-DBOOST_SYSTEM_NO_DEPRECATED)
 add_definitions(-DBOOST_ERROR_CODE_HEADER_ONLY)
 if(WIN32)
@@ -65,6 +65,7 @@ add_executable(gtest_unit
     UnitTest_Percolator_Option.cpp
     UnitTest_Percolator_TabReader.cpp
     UnitTest_Percolator_SetHandler.cpp
+    UnitTest_Percolator_InputFileResolver.cpp
     UnitTest_Percolator_DataSet.cpp
     UnitTest_Percolator_IsplineRegression.cpp
     UnitTest_Percolator_Scores.cpp
@@ -91,6 +92,8 @@ target_link_libraries(gtest_unit
     Eigen3::Eigen
     perclibrary
     dblas
+    Boost::filesystem
+    Boost::system
 )
 if(NOT WIN32)
   target_link_libraries(gtest_unit PRIVATE pthread)

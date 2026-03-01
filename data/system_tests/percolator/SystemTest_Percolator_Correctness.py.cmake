@@ -5,6 +5,8 @@
 import os
 import sys
 import tempfile
+import gzip
+import shutil
 
 pathToBinaries = "@pathToBinaries@"
 pathToData = "@pathToData@"
@@ -40,6 +42,24 @@ def canPercRunThisXml(testName,flags,testFile):
 def canPercRunThisTab(testName,flags,testFile):
   return canPercRunThis(testName,flags,testFile,"",False)
 
+def canPercRunWithInputArgs(testName, flags, inputArgs, checkValidXml=True):
+  success = True
+  outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
+  xmlOutput = doubleQuote(outputPath + ".pout.xml")
+  txtOutput = doubleQuote(outputPath + ".txt")
+  percExe = doubleQuote(os.path.join(pathToBinaries, "percolator"))
+  cmd = ' '.join([percExe, inputArgs, '-S 2 -X', xmlOutput, flags, '>', txtOutput,'2>&1'])
+  processFile = os.popen(cmd)
+  exitStatus = processFile.close()
+  if exitStatus is not None:
+    print(cmd)
+    print("...TEST FAILED: percolator ("+testName+") terminated with " + os.strerror(exitStatus) + " exit status")
+    print("check "+ txtOutput +" for details")
+    success = False
+  if checkValidXml:
+    success = success and validate(testName,xmlOutput)
+  return success
+
 def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
   success = True
   outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
@@ -58,6 +78,23 @@ def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
   if checkValidXml:
     success = success and validate(testName,xmlOutput)
   return success
+
+def createMiniPin(sourcePath, targetPath, maxLines=250):
+  with open(sourcePath, "r") as src:
+    with open(targetPath, "w") as dst:
+      for i, line in enumerate(src):
+        dst.write(line)
+        if i >= maxLines:
+          break
+
+def gzipFile(sourcePath, targetPath):
+  with open(sourcePath, "rb") as src:
+    with gzip.open(targetPath, "wb") as dst:
+      shutil.copyfileobj(src, dst)
+
+def ensureDir(path):
+  if not os.path.isdir(path):
+    os.makedirs(path)
 
 # puts double quotes around the input string, needed for windows shell
 def doubleQuote(path):
@@ -108,6 +145,38 @@ weights = os.path.join(tempfile.gettempdir(), "test_weights.txt")
 T.doTest(canPercRunThisTab("save_weights", "-w %s" % weights, "percolator/tab/percolatorTab"))
 T.doTest(canPercRunThisTab("static_model", "--static -W %s" % weights, "percolator/tab/percolatorTab"))
 os.remove(weights)
+
+print("(*) running percolator with quoted wildcard input over .pin.gz files...")
+globInputRoot = os.path.join(pathToOutputData, "glob_inputs")
+globSubDirA = os.path.join(globInputRoot, "a")
+globSubDirB = os.path.join(globInputRoot, "b")
+ensureDir(globSubDirA)
+ensureDir(globSubDirB)
+
+sourceTab = os.path.join(pathToData, "percolator/tab/percolatorTab")
+pinA = os.path.join(globSubDirA, "input_a.pin")
+pinB = os.path.join(globSubDirB, "input_b.pin")
+createMiniPin(sourceTab, pinA)
+createMiniPin(sourceTab, pinB)
+gzA = pinA + ".gz"
+gzB = pinB + ".gz"
+gzipFile(pinA, gzA)
+gzipFile(pinB, gzB)
+
+wildcardArg = doubleQuote(os.path.join(globInputRoot, "*", "*.pin.gz"))
+T.doTest(canPercRunWithInputArgs("tab_glob_gz", "-y -U", wildcardArg, False))
+
+print("(*) running percolator with --input-file-list containing pin.gz paths and patterns...")
+inputListPath = os.path.join(pathToOutputData, "pin_inputs.txt")
+with open(inputListPath, "w") as listFile:
+  listFile.write("# Mixed list of paths and wildcard patterns\n")
+  listFile.write(gzA + "\n")
+  listFile.write("\n")
+  listFile.write(os.path.join(globInputRoot, "b", "*.pin.gz") + "\n")
+  listFile.write(gzA + "\n")
+
+fileListArgs = "--input-file-list " + doubleQuote(inputListPath)
+T.doTest(canPercRunWithInputArgs("tab_file_list_gz", "-y -U", fileListArgs, False))
 
 # if no errors were encountered, succeed
 if T.failures == 0:
