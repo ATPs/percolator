@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# 1. Define Source and Build directories
+# The folder containing the top-level CMakeLists.txt file.
+SRC_DIR="/data/p/percolator/percolator"
+
+# The folder where the build files and executables will be created.
+BUILD_DIR="${SRC_DIR}/bin"
+CUSTOM_BOOST_DIR="/data/p/sys/boost/boost_1_88_0_install"
+# 2. Create the build directory if it does not exist
+# The -p flag ensures no error is thrown if the directory already exists.
+echo "Creating build directory at: ${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}"
+
+# 3. Navigate into the build directory
+cd "${BUILD_DIR}"
+
+# 4. Configure the project with CMake
+# This command generates the Makefiles needed for compilation.
+# We are pointing CMake back to the source directory ("..").
+# - CMAKE_BUILD_TYPE=Release : Compiles with high optimization levels.
+# - XML_SUPPORT=ON           : Builds Percolator with XML support.
+echo "Configuring project with CMake..."
+cmake -DCMAKE_BUILD_TYPE=Release \
+      -DXML_SUPPORT=ON \
+      -DBOOST_ROOT="${CUSTOM_BOOST_DIR}" \
+      -DBoost_USE_STATIC_LIBS=ON \
+      -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+      \
+      "${SRC_DIR}"
+
+# 5. Compile the code with Make
+# The -j 4 flag tells make to use 4 CPU cores to speed up the build.
+# You can adjust this number based on your system's core count.
+echo "Compiling with Make..."
+make -j 40
+
+echo "Build finished. Executables are located in ${BUILD_DIR}/src"
