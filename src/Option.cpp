@@ -20,6 +20,90 @@
 const std::string Option::NO_SHORT_OPT = "NO_SHORT_OPT_CONSTANT";
 const std::string Option::EXPERIMENTAL_FEATURE = "EXPERIMENTAL_FEATURE_CONSTANT";
 
+namespace {
+
+unsigned int detectTerminalWidth() {
+  const unsigned int kDefaultWidth = 120u;
+  const unsigned int kMinWidth = 80u;
+  const char* cols = std::getenv("COLUMNS");
+  if (cols == NULL) {
+    return kDefaultWidth;
+  }
+  int parsed = 0;
+  std::istringstream iss(cols);
+  if (!(iss >> parsed)) {
+    return kDefaultWidth;
+  }
+  if (parsed < static_cast<int>(kMinWidth)) {
+    return kMinWidth;
+  }
+  return static_cast<unsigned int>(parsed);
+}
+
+std::vector<std::string> wrapText(const std::string& text, size_t width) {
+  std::vector<std::string> lines;
+  if (text.empty()) {
+    lines.push_back("");
+    return lines;
+  }
+  if (width == 0) {
+    lines.push_back(text);
+    return lines;
+  }
+
+  std::string::size_type start = 0;
+  while (start < text.size()) {
+    while (start < text.size() && text[start] == ' ') {
+      ++start;
+    }
+    if (start >= text.size()) {
+      break;
+    }
+
+    std::string::size_type end = start + width;
+    if (end >= text.size()) {
+      lines.push_back(text.substr(start));
+      break;
+    }
+
+    std::string::size_type split = text.rfind(' ', end);
+    if (split == std::string::npos || split < start) {
+      split = end;
+    }
+    lines.push_back(text.substr(start, split - start));
+    start = split + 1;
+  }
+
+  if (lines.empty()) {
+    lines.push_back("");
+  }
+  return lines;
+}
+
+std::string formatOptionLabel(const Option& option) {
+  std::string label;
+  if (option.shortOpt != Option::NO_SHORT_OPT &&
+      option.shortOpt != Option::EXPERIMENTAL_FEATURE) {
+    label += option.shortOpt;
+    if (option.helpType.length() > 0) {
+      label += " <" + option.helpType + ">";
+    }
+    label += ", ";
+  }
+
+  label += option.longOpt;
+  if (option.helpType.length() > 0) {
+    label += " <" + option.helpType + ">";
+  }
+
+  if (option.shortOpt == Option::EXPERIMENTAL_FEATURE) {
+    label += " (experimental)";
+  }
+  return label;
+}
+
+}  // namespace
+
 template<class T>
 bool from_string(T& t, const std::string& s) {
   std::istringstream iss(s);
@@ -98,20 +182,24 @@ unsigned int CommandLineParser::getUInt(std::string dest, int lower, int upper){
 void CommandLineParser::defineOption(std::string shortOpt, std::string longOpt,
                                      std::string help, std::string helpType,
                                      OptionOption typ, std::string dfault) {
+  const std::string normalizedShortOpt =
+      shortOpt.empty() ? Option::NO_SHORT_OPT : shortOpt;
+
   //NOTE brute force to check if the option is already defined
   for(std::vector<Option>::const_iterator it = opts.begin();
       it != opts.end(); it++) {
-	  if((shortOpt != Option::NO_SHORT_OPT && 
-	      shortOpt != Option::EXPERIMENTAL_FEATURE && 
-	      (*it).shortOpt == shortOpt) 
+	  if((normalizedShortOpt != Option::NO_SHORT_OPT && 
+	      normalizedShortOpt != Option::EXPERIMENTAL_FEATURE && 
+	      (*it).shortOpt == normalizedShortOpt) 
 	     || (*it).longOpt == longOpt) {
 	    std::ostringstream temp;
-	    temp << "ERROR : option " << shortOpt << "," << longOpt << " is already defined " << std::endl;
+	    temp << "ERROR : option " << normalizedShortOpt << "," << longOpt
+           << " is already defined " << std::endl;
 	    throw MyException(temp.str());
 	  }
   }
   
-  opts.insert(opts.begin(), Option((shortOpt == Option::NO_SHORT_OPT || shortOpt == Option::EXPERIMENTAL_FEATURE) ? shortOpt : "-" + shortOpt,
+  opts.insert(opts.begin(), Option((normalizedShortOpt == Option::NO_SHORT_OPT || normalizedShortOpt == Option::EXPERIMENTAL_FEATURE) ? normalizedShortOpt : "-" + normalizedShortOpt,
                                    "--" + longOpt,
                                    longOpt,
                                    help,
@@ -178,38 +266,47 @@ void CommandLineParser::error(std::string msg) {
 }
 
 void CommandLineParser::help() {
-  std::string::size_type descLen = optMaxLen + 8;
-  std::string::size_type helpLen = lineLen - descLen;
+  const unsigned int lineWidth = detectTerminalWidth();
+
+  size_t maxLabelLen = 0;
+  for (size_t i = opts.size(); i--;) {
+    const size_t len = formatOptionLabel(opts[i]).size();
+    if (len > maxLabelLen) {
+      maxLabelLen = len;
+    }
+  }
+
+  size_t labelWidth = maxLabelLen + 2;
+  const size_t minDescWidth = 36;
+  const size_t minLabelWidth = 26;
+  const size_t maxLabelWidth = lineWidth / 2;
+  if (labelWidth < minLabelWidth) {
+    labelWidth = minLabelWidth;
+  }
+  if (labelWidth > maxLabelWidth) {
+    labelWidth = maxLabelWidth;
+  }
+  size_t descWidth = lineWidth - labelWidth;
+  if (descWidth < minDescWidth) {
+    descWidth = minDescWidth;
+    labelWidth = (lineWidth > minDescWidth) ? (lineWidth - minDescWidth) : minLabelWidth;
+  }
+
   std::cerr << header << endl << "Options:" << endl;
   for (size_t i = opts.size(); i--;) {
-    std::string::size_type j = 0;
-    if (opts[i].shortOpt != Option::NO_SHORT_OPT && opts[i].shortOpt != Option::EXPERIMENTAL_FEATURE) {
-      std::cerr << " " << opts[i].shortOpt;
-      if (opts[i].helpType.length() > 0) {
-        std::cerr << " <" << opts[i].helpType << ">";
-      }
-    } else if (opts[i].shortOpt == Option::EXPERIMENTAL_FEATURE) {
-      std::cerr << "[EXPERIMENTAL FEATURE]";
-    }
-    std::cerr << endl;
-    std::string desc = " " + opts[i].longOpt;
-    if (opts[i].helpType.length() > 0) {
-      desc += " <" + opts[i].helpType + ">";
-    }
-    while (j < opts[i].help.length()) {
-      std::cerr.width(static_cast<std::streamsize>(descLen));
-      std::cerr << left << desc;
-      desc = " ";
+    const std::string label = formatOptionLabel(opts[i]);
+    const std::vector<std::string> wrapped = wrapText(opts[i].help, descWidth);
+
+    std::cerr.width(static_cast<std::streamsize>(labelWidth));
+    std::cerr << std::left << label;
+    std::cerr.width(0);
+    std::cerr << wrapped[0] << endl;
+
+    for (size_t j = 1; j < wrapped.size(); ++j) {
+      std::cerr.width(static_cast<std::streamsize>(labelWidth));
+      std::cerr << std::left << "";
       std::cerr.width(0);
-      std::string::size_type l = helpLen;
-      if (j + l < opts[i].help.length()) {
-        std::string::size_type p = opts[i].help.rfind(' ', j + l);
-        if (p != std::string::npos && p > j) {
-          l = p - j + 1;
-        }
-      }
-      std::cerr << opts[i].help.substr(j, l) << endl;
-      j += l;
+      std::cerr << wrapped[j] << endl;
     }
   }
   std::cerr << endl << endnote << endl;
