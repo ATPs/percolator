@@ -21,8 +21,10 @@
 
 #include <gtest/gtest.h>
 #include <cstdarg>
+#include <sstream>
 #include "SetHandler.h"
 #include "DataSet.h"
+#include "PerInputOutputPlanner.h"
 #include "Scores.h"
 
 // Some strings in alphabetical order.
@@ -221,4 +223,26 @@ TEST_F(ScoresTest, CheckPopulatingEmpty)
     setHandler.push_back_dataset(set1);
     setHandler.push_back_dataset(set2);
     EXPECT_THROW(scores.populateWithPSMs(setHandler), MyException);
+}
+
+TEST_F(ScoresTest, PrintFilteredBySourceKeyStripsInternalPrefix)
+{
+    Scores scores(true);
+
+    PSMDescription *psmA = new PSMDescription("A.AAA.A");
+    psmA->setId(PerInputOutputPlanner::tagPsmId("file1", "id1"));
+    scores.addScoreHolder(ScoreHolder(1.0, LabelType::TARGET, psmA));
+
+    PSMDescription *psmB = new PSMDescription("B.BBB.B");
+    psmB->setId(PerInputOutputPlanner::tagPsmId("file2", "id2"));
+    scores.addScoreHolder(ScoreHolder(2.0, LabelType::TARGET, psmB));
+
+    std::stringstream ss;
+    scores.printFiltered(LabelType::TARGET, ss, "file1",
+                         PerInputOutputPlanner::sourceDelimiter());
+    std::string out = ss.str();
+
+    EXPECT_NE(std::string::npos, out.find("id1"));
+    EXPECT_EQ(std::string::npos, out.find("id2"));
+    EXPECT_EQ(std::string::npos, out.find("file1" + std::string(PerInputOutputPlanner::sourceDelimiter())));
 }

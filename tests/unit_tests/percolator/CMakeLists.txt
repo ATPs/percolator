@@ -66,6 +66,8 @@ add_executable(gtest_unit
     UnitTest_Percolator_TabReader.cpp
     UnitTest_Percolator_SetHandler.cpp
     UnitTest_Percolator_InputFileResolver.cpp
+    UnitTest_Percolator_PerInputOutputPlanner.cpp
+    UnitTest_Percolator_ValidateTabFile.cpp
     UnitTest_Percolator_DataSet.cpp
     UnitTest_Percolator_IsplineRegression.cpp
     UnitTest_Percolator_Scores.cpp

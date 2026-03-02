@@ -1,9 +1,26 @@
 #include "ValidateTabFile.h"
+#include "MyException.h"
+#include "PerInputOutputPlanner.h"
 
 std::string ValidateTabFile::concatenateMultiplePINs(std::vector<std::basic_string<char>> fileNames) {
+  std::vector<std::string> noSourceKeys;
+  return concatenateMultiplePINs(
+      std::vector<std::string>(fileNames.begin(), fileNames.end()),
+      noSourceKeys);
+}
+
+std::string ValidateTabFile::concatenateMultiplePINs(
+    const std::vector<std::string>& fileNames,
+    const std::vector<std::string>& sourceKeys) {
   // Validate multiple tab-files, and then concatenate them.
   std::string inputFN;
   std::ifstream pinFileStream;
+  const bool annotateSource = !sourceKeys.empty();
+
+  if (annotateSource && sourceKeys.size() != fileNames.size()) {
+    throw MyException(
+        "Error: source keys must have the same size as input files.");
+  }
 
   /* Complete column position to header name */
   std::map<int,std::string> columnMap = {};
@@ -56,7 +73,8 @@ std::string ValidateTabFile::concatenateMultiplePINs(std::vector<std::basic_stri
   bool nextColumn;
 
   /* Start appending pin files to one pin file. */
-  for(const string &text : fileNames) {
+  for(size_t fileIdx = 0; fileIdx < fileNames.size(); ++fileIdx) {
+    const string& text = fileNames[fileIdx];
     if (VERB > 0) {
       std::cerr << "Reading file: " << text.c_str() << std::endl;
     }
@@ -122,12 +140,25 @@ std::string ValidateTabFile::concatenateMultiplePINs(std::vector<std::basic_stri
     }
 
     do {
+      std::string rowLowerPrefix;
+      bool isDefaultDirectionRow = false;
+      const std::string defaultDirectionString = "defaultdirection";
+      if (nextRow.size() >= defaultDirectionString.size()) {
+        rowLowerPrefix = nextRow.substr(0, defaultDirectionString.size());
+        std::transform(rowLowerPrefix.begin(), rowLowerPrefix.end(),
+                       rowLowerPrefix.begin(), ::tolower);
+        isDefaultDirectionRow = (rowLowerPrefix == defaultDirectionString);
+      }
+
       TabReader readerRow(nextRow);
 
       /* Keep track on column for missing charge states */
       int col = 0;
       while (!readerRow.error()) {           
         std::string value = readerRow.readString();
+        if (annotateSource && col == 0 && !isDefaultDirectionRow) {
+          value = PerInputOutputPlanner::tagPsmId(sourceKeys[fileIdx], value);
+        }
         /* Check for missing charge state */
         if (std::find(missingCols.begin(), missingCols.end(), col) != missingCols.end()) {
           nextColumn=true;

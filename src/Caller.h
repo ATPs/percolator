@@ -21,6 +21,7 @@ limitations under the License.
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -70,6 +71,15 @@ class Caller {
   ProteinProbEstimator* protEstimator_;
   Enzyme* enzyme_;
 
+  struct PerInputOutputSpec {
+    std::string sourceKey;
+    std::string prefix;
+    std::string targetPsms;
+    std::string decoyPsms;
+    std::string targetPeptides;
+    std::string decoyPeptides;
+  };
+
   // file input parameters
   bool tabInput_;
   bool readStdIn_;
@@ -85,6 +95,31 @@ class Caller {
   std::string decoyPsmResultFN_, decoyPeptideResultFN_, decoyProteinResultFN_;
   bool xmlPrintDecoys_, xmlPrintExpMass_;
   bool outputRT_ = false;
+
+  // per-input output mode
+  bool outputEachFolder_;
+  bool trainEach_;
+  std::string outputEachFolderPath_;
+  bool outputEachTargetPsms_;
+  bool outputEachDecoyPsms_;
+  bool outputEachTargetPeptides_;
+  bool outputEachDecoyPeptides_;
+  bool outputEachExtraTab_;
+  bool outputEachExtraXml_;
+  bool outputEachExtraPepXml_;
+  bool outputEachExtraWeight_;
+  bool outputEachExtraProtein_;
+  bool outputEachExtraDecoyProtein_;
+  std::string tabOutputTemplateFN_;
+  std::string xmlOutputTemplateFN_;
+  std::string pepXMLOutputTemplateFN_;
+  std::string weightOutputTemplateFN_;
+  std::string proteinResultTemplateFN_;
+  std::string decoyProteinResultTemplateFN_;
+  std::vector<std::string> resolvedInputOriginalFNs_;
+  std::vector<PerInputOutputSpec> perInputOutputSpecs_;
+  std::string sourceTagDelimiter_;
+  bool useMixMaxBase_;
 
   // report level parameters
   bool reportUniquePeptides_;
@@ -111,9 +146,11 @@ class Caller {
                             XMLInterface& xmlInterface,
                             SetHandler& setHandler,
                             Scores& allScores);
+  int runCore();
   void calcAndOutputResult(Scores& allScores, XMLInterface& xmlInterface);
 
   void calculatePSMProb(Scores& allScores, bool uniquePeptideRun);
+  void writePerInputResults(Scores& allScores, bool unique);
   void writeResults(Scores& allScores, bool unique, bool writeOutput);
   void calculateProteinProbabilities(Scores& allScores);
   void checkIsWritable(const std::string& filePath);

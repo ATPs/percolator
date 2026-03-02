@@ -170,14 +170,14 @@ if(XML_SUPPORT)
 								  XMLInterface.cpp SetHandler.cpp StdvNormalizer.cpp svm.cpp Caller.cpp CompositionSorter.cpp CrossValidation.cpp Enzyme.cpp Globals.cpp NoNormalizer.cpp Normalizer.cpp
 								  SanityCheck.cpp UniNormalizer.cpp DataSet.cpp TabFileValidator.cpp FeatureNames.cpp LogisticRegression.cpp Numerical.cpp Option.cpp PosteriorEstimator.cpp
 								  ProteinProbEstimator.cpp ProteinFDRestimator.cpp ScoreHolder.cpp Scores.cpp PseudoRandom.cpp Set.cpp SqtSanityCheck.cpp ssl.cpp PackedVector.cpp
-								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp Vector.cpp)
+								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp PerInputOutputPlanner.cpp Vector.cpp)
   add_dependencies(perclibrary generate_xsd)
 else(XML_SUPPORT)
   add_library(perclibrary STATIC BaseSpline.cpp MassHandler.cpp ResultHolder.cpp PSMDescription.cpp IsotonicPEP.cpp
 								  XMLInterface.cpp SetHandler.cpp StdvNormalizer.cpp svm.cpp Caller.cpp CompositionSorter.cpp CrossValidation.cpp Enzyme.cpp Globals.cpp NoNormalizer.cpp Normalizer.cpp
 								  SanityCheck.cpp UniNormalizer.cpp DataSet.cpp TabFileValidator.cpp FeatureNames.cpp LogisticRegression.cpp Numerical.cpp Option.cpp PosteriorEstimator.cpp
 								  ProteinProbEstimator.cpp ProteinFDRestimator.cpp ScoreHolder.cpp Scores.cpp PseudoRandom.cpp Set.cpp SqtSanityCheck.cpp ssl.cpp PackedVector.cpp
-								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp Vector.cpp)
+								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp PerInputOutputPlanner.cpp Vector.cpp)
 endif(XML_SUPPORT)
 
 target_link_libraries(perclibrary PUBLIC ${ZLIB_LIBRARIES})

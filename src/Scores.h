@@ -116,6 +116,10 @@ class Scores {
   unsigned getQvaluesBelowLevel(double level);
 
   void print(LabelType label, std::ostream& os = std::cout);
+  void printFiltered(LabelType label,
+                     std::ostream& os,
+                     const std::string& sourceKey,
+                     const std::string& sourceDelimiter);
 
   inline double getPi0() const { return pi0_; }
   inline double getTargetDecoySizeRatio() const {

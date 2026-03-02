@@ -60,6 +60,28 @@ def canPercRunWithInputArgs(testName, flags, inputArgs, checkValidXml=True):
     success = success and validate(testName,xmlOutput)
   return success
 
+def canPercRunWithInputArgsNoXml(testName, flags, inputArgs):
+  success = True
+  outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
+  txtOutput = doubleQuote(outputPath + ".txt")
+  percExe = doubleQuote(os.path.join(pathToBinaries, "percolator"))
+  cmd = ' '.join([percExe, inputArgs, flags, '-S 2', '>', txtOutput,'2>&1'])
+  processFile = os.popen(cmd)
+  exitStatus = processFile.close()
+  if exitStatus is not None:
+    print(cmd)
+    print("...TEST FAILED: percolator ("+testName+") terminated with " + os.strerror(exitStatus) + " exit status")
+    print("check "+ txtOutput +" for details")
+    success = False
+  return success
+
+def filesExist(paths):
+  for path in paths:
+    if not os.path.exists(path):
+      print("...TEST FAILED: expected output missing: " + path)
+      return False
+  return True
+
 def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
   success = True
   outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
@@ -177,6 +199,43 @@ with open(inputListPath, "w") as listFile:
 
 fileListArgs = "--input-file-list " + doubleQuote(inputListPath)
 T.doTest(canPercRunWithInputArgs("tab_file_list_gz", "-y -U", fileListArgs, False))
+
+print("(*) running percolator with --output-each-folder in combined training mode...")
+outputEachCombined = os.path.join(pathToOutputData, "output_each_combined")
+flagsOutputEachCombined = (
+  "-y --output-each-folder " + doubleQuote(outputEachCombined) +
+  " --results-peptides ignored --results-psms ignored")
+inputArgsOutputEach = doubleQuote(gzA) + " " + doubleQuote(gzB)
+expectedCombined = [
+  os.path.join(outputEachCombined, "input_a.target.peptides.tsv"),
+  os.path.join(outputEachCombined, "input_a.target.psms.tsv"),
+  os.path.join(outputEachCombined, "input_b.target.peptides.tsv"),
+  os.path.join(outputEachCombined, "input_b.target.psms.tsv"),
+]
+combinedOk = canPercRunWithInputArgsNoXml("tab_output_each_combined",
+                                          flagsOutputEachCombined,
+                                          inputArgsOutputEach)
+combinedOk = combinedOk and filesExist(expectedCombined)
+T.doTest(combinedOk)
+
+print("(*) running percolator with --output-each-folder and --train-each...")
+outputEachTrainEach = os.path.join(pathToOutputData, "output_each_train_each")
+flagsOutputEachTrainEach = (
+  "-y --output-each-folder " + doubleQuote(outputEachTrainEach) +
+  " --train-each --results-peptides ignored --results-psms ignored -w weights.txt")
+expectedTrainEach = [
+  os.path.join(outputEachTrainEach, "input_a.target.peptides.tsv"),
+  os.path.join(outputEachTrainEach, "input_a.target.psms.tsv"),
+  os.path.join(outputEachTrainEach, "input_a.weights.txt"),
+  os.path.join(outputEachTrainEach, "input_b.target.peptides.tsv"),
+  os.path.join(outputEachTrainEach, "input_b.target.psms.tsv"),
+  os.path.join(outputEachTrainEach, "input_b.weights.txt"),
+]
+trainEachOk = canPercRunWithInputArgsNoXml("tab_output_each_train_each",
+                                           flagsOutputEachTrainEach,
+                                           inputArgsOutputEach)
+trainEachOk = trainEachOk and filesExist(expectedTrainEach)
+T.doTest(trainEachOk)
 
 # if no errors were encountered, succeed
 if T.failures == 0:

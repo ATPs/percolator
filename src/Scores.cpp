@@ -38,6 +38,26 @@
 #include "ssl.h"
 #include "IsotonicPEP.h"
 
+namespace {
+
+bool splitTaggedPsmId(const std::string& taggedId,
+                      const std::string& sourceDelimiter,
+                      std::string& sourceKey,
+                      std::string& originalId) {
+  if (sourceDelimiter.empty()) {
+    return false;
+  }
+  const size_t pos = taggedId.find(sourceDelimiter);
+  if (pos == std::string::npos) {
+    return false;
+  }
+  sourceKey = taggedId.substr(0, pos);
+  originalId = taggedId.substr(pos + sourceDelimiter.size());
+  return true;
+}
+
+}  // namespace
+
 void Scores::merge(std::vector<Scores>& sv,
                    double fdr,
                    bool skipNormalizeScores,
@@ -108,6 +128,13 @@ void Scores::scoreAndAddPSM(ScoreHolder& sh,
 }
 
 void Scores::print(LabelType label, std::ostream& os) {
+  printFiltered(label, os, "", "");
+}
+
+void Scores::printFiltered(LabelType label,
+                           std::ostream& os,
+                           const std::string& sourceKey,
+                           const std::string& sourceDelimiter) {
   std::vector<ScoreHolder>::iterator scoreIt = scores_.begin();
   os << "PSMId\t";
   if (PSMDescription::hasSpectrumFileName()) {
@@ -122,10 +149,21 @@ void Scores::print(LabelType label, std::ostream& os) {
 
   for (; scoreIt != scores_.end(); ++scoreIt) {
     if (scoreIt->label == label) {
+      std::string outputPsmId = scoreIt->pPSM->getId();
+      if (!sourceKey.empty()) {
+        std::string taggedSourceKey;
+        std::string plainPsmId;
+        if (!splitTaggedPsmId(outputPsmId, sourceDelimiter, taggedSourceKey,
+                              plainPsmId) ||
+            taggedSourceKey != sourceKey) {
+          continue;
+        }
+        outputPsmId = plainPsmId;
+      }
       std::ostringstream out;
       scoreIt->pPSM->printProteins(out);
       ResultHolder rh(scoreIt->score, scoreIt->q, scoreIt->pep,
-                      scoreIt->pPSM->getId(), scoreIt->pPSM->getFullPeptide(),
+                      outputPsmId, scoreIt->pPSM->getFullPeptide(),
                       out.str(), scoreIt->pPSM->getSpectrumFileName());
       if (is_output_rt_) {
         rh.retentionTime = scoreIt->pPSM->getRetentionTime();
