@@ -42,6 +42,12 @@
 #include "ValidateTabFile.h"
 using namespace std;
 
+namespace {
+
+const char* kCombinedWeightOutputName = "percolator.model.weights";
+
+}
+
 Caller::Caller()
     : pNorm_(NULL),
       pCheck_(NULL),
@@ -231,6 +237,9 @@ bool Caller::parseOptions(int argc, char** argv) {
              "<prefix>.target.peptides.tsv,\n";
   endnote << "               <prefix>.decoy.psms.tsv, "
              "<prefix>.decoy.peptides.tsv.\n";
+  endnote << "  With --weights and no --train-each, one shared weights file is "
+             "written:\n";
+  endnote << "               percolator.model.weights\n";
   endnote << "  In --output-each-folder mode, values for --results-peptides, "
              "--decoy-results-peptides,\n";
   endnote << "  --results-psms, and --decoy-results-psms are ignored and only "
@@ -328,8 +337,12 @@ bool Caller::parseOptions(int argc, char** argv) {
                    "The separator used in tab delimited input and output for "
                    "separating protein names. Default = tab-char.",
                    "char");
-  cmd.defineOption("w", "weights", "Output final weights to the given file",
-                   "filename");
+  cmd.defineOption(
+      "w", "weights",
+      "Output final weights to the given file. In --output-each-folder mode "
+      "without --train-each, writes percolator.model.weights in the output "
+      "folder.",
+      "filename");
   cmd.defineOption(
       "W", "init-weights",
       "Read the unnormalized initial weights from the third line of the given "
@@ -822,9 +835,18 @@ bool Caller::parseOptions(int argc, char** argv) {
       outputEachExtraWeight_ = true;
       weightOutputFN_.clear();
     } else if (outputEachFolder_) {
-      std::cerr << "Error: --weights with --output-each-folder requires "
-                << "--train-each." << std::endl;
-      return 0;
+      bool createdOutputFolder = false;
+      std::string reserveError;
+      if (!PerInputOutputPlanner::reserveOutputFile(
+              outputEachFolderPath_, kCombinedWeightOutputName, weightOutputFN_,
+              createdOutputFolder, reserveError)) {
+        std::cerr << reserveError << std::endl;
+        return 0;
+      }
+      if (createdOutputFolder && VERB > 0) {
+        std::cerr << "Created output folder for --output-each-folder: "
+                  << outputEachFolderPath_ << std::endl;
+      }
     } else {
       weightOutputFN_ = weightOutputTemplateFN_;
       checkIsWritable(weightOutputFN_);
@@ -1040,6 +1062,8 @@ bool Caller::parseOptions(int argc, char** argv) {
       outputEachExtraTab_ || outputEachExtraXml_ || outputEachExtraPepXml_ ||
       outputEachExtraWeight_ || outputEachExtraProtein_ ||
       outputEachExtraDecoyProtein_;
+  const bool hasCombinedWeightOutput =
+      outputEachFolder_ && !trainEach_ && !weightOutputFN_.empty();
 
   if (outputEachFolder_) {
     if (!hasTabInputSources || hasXmlInputFile || hasXmlInputStdin ||
@@ -1049,13 +1073,14 @@ bool Caller::parseOptions(int argc, char** argv) {
       return 0;
     }
     if (!trainEach_ && hasPerInputExtraOutputs) {
-      std::cerr << "Error: --tab-out, --xmloutput, --pepxml-output, --weights, "
+      std::cerr << "Error: --tab-out, --xmloutput, --pepxml-output, "
                    "--results-proteins, and --decoy-results-proteins require "
                    "--train-each when --output-each-folder is set."
                 << std::endl;
       return 0;
     }
-    if (!hasPerInputTsvOutputs && !(trainEach_ && hasPerInputExtraOutputs)) {
+    if (!hasPerInputTsvOutputs && !(trainEach_ && hasPerInputExtraOutputs) &&
+        !hasCombinedWeightOutput) {
       std::cerr << "Error: --output-each-folder requires at least one per-file "
                    "output option." << std::endl;
       return 0;

@@ -75,6 +75,20 @@ def canPercRunWithInputArgsNoXml(testName, flags, inputArgs):
     success = False
   return success
 
+def canPercFailWithInputArgsNoXml(testName, flags, inputArgs):
+  outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
+  txtOutput = doubleQuote(outputPath + ".txt")
+  percExe = doubleQuote(os.path.join(pathToBinaries, "percolator"))
+  cmd = ' '.join([percExe, inputArgs, flags, '-S 2', '>', txtOutput,'2>&1'])
+  processFile = os.popen(cmd)
+  exitStatus = processFile.close()
+  if exitStatus is None:
+    print(cmd)
+    print("...TEST FAILED: percolator ("+testName+") succeeded but failure was expected")
+    print("check "+ txtOutput +" for details")
+    return False
+  return True
+
 def filesExist(paths):
   for path in paths:
     if not os.path.exists(path):
@@ -217,6 +231,43 @@ combinedOk = canPercRunWithInputArgsNoXml("tab_output_each_combined",
                                           inputArgsOutputEach)
 combinedOk = combinedOk and filesExist(expectedCombined)
 T.doTest(combinedOk)
+
+print("(*) running percolator with --output-each-folder in combined mode and shared weights...")
+outputEachCombinedWeights = os.path.join(pathToOutputData, "output_each_combined_weights")
+if os.path.isdir(outputEachCombinedWeights):
+  shutil.rmtree(outputEachCombinedWeights)
+flagsOutputEachCombinedWeights = (
+  "-y --output-each-folder " + doubleQuote(outputEachCombinedWeights) +
+  " --results-peptides ignored --results-psms ignored -w ignored.txt")
+expectedCombinedWeights = [
+  os.path.join(outputEachCombinedWeights, "input_a.target.peptides.tsv"),
+  os.path.join(outputEachCombinedWeights, "input_a.target.psms.tsv"),
+  os.path.join(outputEachCombinedWeights, "input_b.target.peptides.tsv"),
+  os.path.join(outputEachCombinedWeights, "input_b.target.psms.tsv"),
+  os.path.join(outputEachCombinedWeights, "percolator.model.weights"),
+]
+combinedWeightsOk = canPercRunWithInputArgsNoXml(
+  "tab_output_each_combined_weights",
+  flagsOutputEachCombinedWeights,
+  inputArgsOutputEach)
+combinedWeightsOk = combinedWeightsOk and filesExist(expectedCombinedWeights)
+T.doTest(combinedWeightsOk)
+
+print("(*) running percolator with a pre-existing shared weights file (expect failure)...")
+outputEachCombinedWeightsExists = os.path.join(pathToOutputData, "output_each_combined_weights_exists")
+if os.path.isdir(outputEachCombinedWeightsExists):
+  shutil.rmtree(outputEachCombinedWeightsExists)
+ensureDir(outputEachCombinedWeightsExists)
+existingWeightsFile = os.path.join(outputEachCombinedWeightsExists, "percolator.model.weights")
+with open(existingWeightsFile, "w") as weightsFile:
+  weightsFile.write("existing")
+flagsOutputEachCombinedWeightsExists = (
+  "-y --output-each-folder " + doubleQuote(outputEachCombinedWeightsExists) +
+  " --results-peptides ignored --results-psms ignored -w ignored.txt")
+T.doTest(canPercFailWithInputArgsNoXml(
+  "tab_output_each_combined_weights_exists",
+  flagsOutputEachCombinedWeightsExists,
+  inputArgsOutputEach))
 
 print("(*) running percolator with --output-each-folder and --train-each...")
 outputEachTrainEach = os.path.join(pathToOutputData, "output_each_train_each")

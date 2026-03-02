@@ -29,6 +29,11 @@ class PerInputOutputPlanner {
   static bool ensureOutputFolder(const std::string& folderPath,
                                  bool& createdDirectory,
                                  std::string& error);
+  static bool reserveOutputFile(const std::string& folderPath,
+                                const std::string& fileName,
+                                std::string& outputPath,
+                                bool& createdDirectory,
+                                std::string& error);
 
   static FixedOutputs buildFixedOutputs(const std::string& folderPath,
                                         const Entry& entry,

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -203,6 +204,46 @@ bool PerInputOutputPlanner::ensureOutputFolder(const std::string& folderPath,
     return false;
   }
   createdDirectory = true;
+  return true;
+}
+
+bool PerInputOutputPlanner::reserveOutputFile(const std::string& folderPath,
+                                              const std::string& fileName,
+                                              std::string& outputPath,
+                                              bool& createdDirectory,
+                                              std::string& error) {
+  outputPath.clear();
+  error.clear();
+
+  if (fileName.empty()) {
+    error = "Error: output filename must not be empty.";
+    return false;
+  }
+
+  if (!ensureOutputFolder(folderPath, createdDirectory, error)) {
+    return false;
+  }
+
+  boost::filesystem::path outputFile =
+      boost::filesystem::path(folderPath) / fileName;
+  outputPath = outputFile.string();
+
+  boost::system::error_code ec;
+  if (boost::filesystem::exists(outputFile, ec)) {
+    if (ec) {
+      error = "Error: failed to inspect output file: " + outputPath;
+    } else {
+      error = "Error: output file already exists: " + outputPath;
+    }
+    return false;
+  }
+
+  std::ofstream outputStream(outputPath.c_str(), std::ios::out);
+  if (!outputStream.is_open()) {
+    error = "Error: failed to create output file: " + outputPath;
+    return false;
+  }
+
   return true;
 }
 

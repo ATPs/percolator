@@ -88,6 +88,37 @@ TEST(PerInputOutputPlannerTest, EnsureOutputFolderCreatesDirectory) {
   EXPECT_TRUE(boost::filesystem::is_directory(outputDir));
 }
 
+TEST(PerInputOutputPlannerTest, ReserveOutputFileCreatesDirectoryAndFile) {
+  ScopedTempDir tempDir;
+  boost::filesystem::path outputDir = tempDir.path() / "results" / "weights";
+
+  bool createdDir = false;
+  std::string outputPath;
+  std::string error;
+  ASSERT_TRUE(PerInputOutputPlanner::reserveOutputFile(
+      outputDir.string(), "percolator.model.weights", outputPath, createdDir,
+      error));
+  EXPECT_TRUE(createdDir);
+  EXPECT_EQ((outputDir / "percolator.model.weights").string(), outputPath);
+  EXPECT_TRUE(boost::filesystem::exists(outputPath));
+}
+
+TEST(PerInputOutputPlannerTest, ReserveOutputFileFailsWhenFileExists) {
+  ScopedTempDir tempDir;
+  boost::filesystem::path outputDir = tempDir.path() / "results";
+  boost::filesystem::create_directories(outputDir);
+  boost::filesystem::path outputFile = outputDir / "percolator.model.weights";
+  writeText(outputFile, "existing");
+
+  bool createdDir = false;
+  std::string outputPath;
+  std::string error;
+  ASSERT_FALSE(PerInputOutputPlanner::reserveOutputFile(
+      outputDir.string(), "percolator.model.weights", outputPath, createdDir,
+      error));
+  EXPECT_NE(std::string::npos, error.find("already exists"));
+}
+
 TEST(PerInputOutputPlannerTest, BuildFixedOutputsUsesRequestedNaming) {
   PerInputOutputPlanner::Entry entry;
   entry.prefix = "file1";
