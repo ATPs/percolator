@@ -154,30 +154,33 @@ std::string ValidateTabFile::concatenateMultiplePINs(
 
       /* Keep track on column for missing charge states */
       int col = 0;
-      while (!readerRow.error()) {           
-        std::string value = readerRow.readString();
-        if (annotateSource && col == 0 && !isDefaultDirectionRow) {
-          value = PerInputOutputPlanner::tagPsmId(sourceKeys[fileIdx], value);
-        }
-        /* Check for missing charge state */
-        if (std::find(missingCols.begin(), missingCols.end(), col) != missingCols.end()) {
-          nextColumn=true;
-          outFile << 0 << "\t";
+      if (missingCols.empty()) {
+        // Fast path: all headers match and no synthetic columns are inserted.
+        while (!readerRow.error()) {
+          std::string value = readerRow.readString();
+          if (annotateSource && col == 0 && !isDefaultDirectionRow) {
+            value = PerInputOutputPlanner::tagPsmId(sourceKeys[fileIdx], value);
+          }
+          outFile << value << "\t";
           col++;
-          /* Check for adjecent missing charge states */
-          while(nextColumn) {
-            if(std::find(missingCols.begin(), missingCols.end(), col) != missingCols.end()) {
-              /* Missing adjecent charge state  */
-              outFile << 0 << "\t";
-              col++;
-            } else {
-              /* Charge states  */
-              nextColumn = false;
-            }
-          }  
         }
-        outFile << value << "\t";
-        col++;
+      } else {
+        // missingCols is ordered; scan it linearly instead of repeated std::find.
+        size_t missingColIdx = 0;
+        while (!readerRow.error()) {
+          while (missingColIdx < missingCols.size() &&
+                 col == missingCols[missingColIdx]) {
+            outFile << 0 << "\t";
+            col++;
+            missingColIdx++;
+          }
+          std::string value = readerRow.readString();
+          if (annotateSource && col == 0 && !isDefaultDirectionRow) {
+            value = PerInputOutputPlanner::tagPsmId(sourceKeys[fileIdx], value);
+          }
+          outFile << value << "\t";
+          col++;
+        }
       }
       outFile << "\n";
     } while (getline(pinFileStream, nextRow));

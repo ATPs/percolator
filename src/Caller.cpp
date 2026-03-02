@@ -38,6 +38,7 @@
 #include "MyException.h"
 #include "Option.h"
 #include "PickedProteinInterface.h"
+#include "TmpDir.h"
 #include "ValidateTabFile.h"
 using namespace std;
 
@@ -180,6 +181,9 @@ bool Caller::parseOptions(int argc, char** argv) {
            "(example: \"*/*.pin.gz\").\n";
   intro << "Gzip-compressed tab input (*.pin.gz) is transparently "
            "decompressed before validation.\n";
+  intro << "Temporary files are created in the current working directory by "
+           "default.\n";
+  intro << "Use --temp-folder <path> to store temporary files elsewhere.\n";
   intro << "Duplicate files are removed after absolute-path normalization "
            "while keeping first-seen order.\n";
   intro << "Per-input output mode: use --output-each-folder for per-file "
@@ -205,6 +209,7 @@ bool Caller::parseOptions(int argc, char** argv) {
              "--results-peptides x --results-psms y\n";
   endnote << "  percolator file1.pin.gz file2.pin --output-each-folder out "
              "--train-each --results-peptides x --results-psms y\n";
+  endnote << "  percolator --temp-folder /path/to/jobtmp file1.pin file2.pin\n";
   endnote << "\n";
   endnote << "input-file-list format:\n";
   endnote << "  One path or pattern per line.\n";
@@ -300,6 +305,12 @@ bool Caller::parseOptions(int argc, char** argv) {
                    "line. Supports comments, wildcard expansion, and .pin.gz "
                    "inputs.",
                    "filename");
+  cmd.defineOption("", "temp-folder",
+                   "Directory for temporary files such as merged input tabs "
+                   "and decompressed .pin.gz inputs. Default = current "
+                   "working directory. Temporary files are removed when "
+                   "Percolator finishes.",
+                   "folder");
   cmd.defineOption("", "output-each-folder",
                    "Write per-input outputs into the specified folder. Folder "
                    "is created if missing.",
@@ -540,6 +551,16 @@ bool Caller::parseOptions(int argc, char** argv) {
 
   if (cmd.isOptionSet("parameter-file")) {
     cmd.parseArgsParamFile(cmd.options["parameter-file"]);
+  }
+
+  if (cmd.isOptionSet("temp-folder")) {
+    const std::string tempFolder = cmd.options["temp-folder"];
+    if (tempFolder.empty()) {
+      std::cerr << "Error: --temp-folder requires a non-empty path."
+                << std::endl;
+      return 0;
+    }
+    TmpDir::setTempRoot(tempFolder);
   }
 
   if (cmd.isOptionSet("output-each-folder")) {
@@ -1359,6 +1380,9 @@ bool Caller::loadAndNormalizeData(std::istream& dataStream,
  */
 int Caller::run() {
   timer.reset();
+  struct TmpDirCleanupGuard {
+    ~TmpDirCleanupGuard() { TmpDir::cleanupAll(); }
+  } tmpDirCleanupGuard;
 
   if (VERB > 0) {
     std::cerr << extendedGreeter();
