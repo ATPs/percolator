@@ -145,6 +145,60 @@ def filesMatch(paths):
         return False
   return True
 
+def createPinWithProteinPrefix(sourcePath, targetPath, oldPrefix, newPrefix):
+  with open(sourcePath, "r") as sourceFile:
+    with open(targetPath, "w") as targetFile:
+      header = next(sourceFile)
+      targetFile.write(header)
+      proteinColumn = header.rstrip("\n").split("\t").index("Proteins")
+      for line in sourceFile:
+        fields = line.rstrip("\n").split("\t")
+        for index in range(proteinColumn, len(fields)):
+          fields[index] = fields[index].replace(oldPrefix, newPrefix)
+        targetFile.write("\t".join(fields) + "\n")
+
+def runOutputCollisionCase(testName, reverseInputs=False):
+  caseDir = os.path.join(pathToOutputData, testName)
+  inputDir = os.path.join(caseDir, "inputs")
+  outputDir = os.path.join(caseDir, "outputs")
+  removeDirIfExists(caseDir)
+  ensureDir(inputDir)
+  ensureDir(outputDir)
+
+  inputA = os.path.join(inputDir, "a.pin")
+  inputB = os.path.join(inputDir, "a.target.pin")
+  createMiniPin(sourceTab, inputA)
+  createMiniPin(sourceTab, inputB)
+
+  collisionPath = os.path.join(outputDir, "a.target.psms.tsv")
+  sentinel = b"preserve output collision sentinel\n"
+  with open(collisionPath, "wb") as collisionFile:
+    collisionFile.write(sentinel)
+
+  inputs = [inputA, inputB]
+  if reverseInputs:
+    inputs.reverse()
+  inputArgs = " ".join(doubleQuote(path) for path in inputs)
+  flags = (
+    "-y --output-each-folder " + doubleQuote(outputDir) +
+    " --train-each --results-psms ignored -w psms.tsv")
+  failedAsExpected = canPercFailWithInputArgsNoXml(
+    testName, flags, inputArgs)
+  logPath = os.path.join(pathToOutputData, "PERCOLATOR_" + testName + ".txt")
+  with open(logPath, "r") as logFile:
+    logText = logFile.read()
+  if collisionPath not in logText:
+    print("...TEST FAILED: output collision path missing from diagnostic")
+    failedAsExpected = False
+  with open(collisionPath, "rb") as collisionFile:
+    if collisionFile.read() != sentinel:
+      print("...TEST FAILED: output collision overwrote the sentinel")
+      failedAsExpected = False
+  if sorted(os.listdir(outputDir)) != [os.path.basename(collisionPath)]:
+    print("...TEST FAILED: output files were created before collision check")
+    failedAsExpected = False
+  return failedAsExpected
+
 def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
   success = True
   outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
@@ -373,6 +427,115 @@ collisionOk = collisionOk and collisionInputB in collisionLogText
 with open(collisionInputB, "rb") as collisionFile:
   collisionOk = collisionOk and collisionFile.read() == collisionContents
 T.doTest(collisionOk)
+
+print("(*) checking per-input protein inference with independent decoy prefixes...")
+proteinPrefixDir = os.path.join(pathToOutputData, "train_each_protein_prefix")
+removeDirIfExists(proteinPrefixDir)
+ensureDir(proteinPrefixDir)
+proteinPinDecoy = os.path.join(proteinPrefixDir, "decoy_.pin")
+proteinPinRev = os.path.join(proteinPrefixDir, "rev_.pin")
+shutil.copyfile(sourceTab, proteinPinDecoy)
+createPinWithProteinPrefix(sourceTab, proteinPinRev, "decoy_", "rev_")
+
+proteinStandaloneDir = os.path.join(proteinPrefixDir, "standalone")
+proteinTrainEachDir = os.path.join(proteinPrefixDir, "train_each")
+proteinTrainEachReverseDir = os.path.join(proteinPrefixDir, "train_each_reverse")
+ensureDir(proteinStandaloneDir)
+proteinStandalone = {
+  "decoy_": [
+    os.path.join(proteinStandaloneDir, "decoy_.target.proteins.tsv"),
+    os.path.join(proteinStandaloneDir, "decoy_.decoy.proteins.tsv"),
+  ],
+  "rev_": [
+    os.path.join(proteinStandaloneDir, "rev_.target.proteins.tsv"),
+    os.path.join(proteinStandaloneDir, "rev_.decoy.proteins.tsv"),
+  ],
+}
+proteinStandaloneOk = True
+for prefix, inputPath in [("decoy_", proteinPinDecoy), ("rev_", proteinPinRev)]:
+  targetOutput, decoyOutput = proteinStandalone[prefix]
+  standaloneFlags = (
+    "-f auto --results-proteins " + doubleQuote(targetOutput) +
+    " --decoy-results-proteins " + doubleQuote(decoyOutput))
+  standaloneOk = canPercRunWithInputArgsNoXml(
+    "protein_standalone_" + prefix.rstrip("_"), standaloneFlags,
+    doubleQuote(inputPath))
+  proteinStandaloneOk = proteinStandaloneOk and standaloneOk
+proteinStandaloneOk = proteinStandaloneOk and filesExist(
+  proteinStandalone["decoy_"] + proteinStandalone["rev_"])
+
+def compareTrainEachProteinOutputs(testName, outputDir, inputs):
+  removeDirIfExists(outputDir)
+  flags = (
+    "-f auto --output-each-folder " + doubleQuote(outputDir) +
+    " --train-each --results-proteins target.proteins.tsv"
+    " --decoy-results-proteins decoy.proteins.tsv")
+  inputArgs = " ".join(doubleQuote(path) for path in inputs)
+  runOk = canPercRunWithInputArgsNoXml(testName, flags, inputArgs)
+  expected = []
+  for prefix in ["decoy_", "rev_"]:
+    expected.extend([
+      os.path.join(outputDir, prefix + ".target.proteins.tsv"),
+      os.path.join(outputDir, prefix + ".decoy.proteins.tsv"),
+    ])
+  runOk = runOk and filesExist(expected)
+  if runOk:
+    for prefix in ["decoy_", "rev_"]:
+      generated = [
+        os.path.join(outputDir, prefix + ".target.proteins.tsv"),
+        os.path.join(outputDir, prefix + ".decoy.proteins.tsv"),
+      ]
+      runOk = runOk and filesMatch(
+        [generated[0], proteinStandalone[prefix][0]])
+      runOk = runOk and filesMatch(
+        [generated[1], proteinStandalone[prefix][1]])
+  return runOk
+
+proteinPrefixOk = proteinStandaloneOk
+if proteinPrefixOk:
+  proteinPrefixOk = compareTrainEachProteinOutputs(
+    "protein_train_each_prefix", proteinTrainEachDir,
+    [proteinPinDecoy, proteinPinRev])
+if proteinPrefixOk:
+  proteinPrefixOk = compareTrainEachProteinOutputs(
+    "protein_train_each_prefix_reverse", proteinTrainEachReverseDir,
+    [proteinPinRev, proteinPinDecoy])
+T.doTest(proteinPrefixOk)
+
+print("(*) checking train-each output collision preflight and recovery...")
+collisionForwardOk = runOutputCollisionCase(
+  "train_each_output_collision_forward")
+collisionReverseOk = runOutputCollisionCase(
+  "train_each_output_collision_reverse", True)
+T.doTest(collisionForwardOk and collisionReverseOk)
+
+print("(*) checking nonconflicting per-input weights still succeed...")
+trainEachWeightsDir = os.path.join(
+  pathToOutputData, "train_each_nonconflicting_weights")
+removeDirIfExists(trainEachWeightsDir)
+trainEachWeightsInputDir = os.path.join(trainEachWeightsDir, "inputs")
+trainEachWeightsOutputDir = os.path.join(trainEachWeightsDir, "outputs")
+ensureDir(trainEachWeightsInputDir)
+trainEachWeightsInputA = os.path.join(trainEachWeightsInputDir, "a.pin")
+trainEachWeightsInputB = os.path.join(trainEachWeightsInputDir, "a.target.pin")
+createMiniPin(sourceTab, trainEachWeightsInputA)
+createMiniPin(sourceTab, trainEachWeightsInputB)
+trainEachWeightsFlags = (
+  "-y --output-each-folder " + doubleQuote(trainEachWeightsOutputDir) +
+  " --train-each --results-psms ignored -w weights.txt")
+trainEachWeightsArgs = (
+  doubleQuote(trainEachWeightsInputA) + " " +
+  doubleQuote(trainEachWeightsInputB))
+trainEachWeightsOk = canPercRunWithInputArgsNoXml(
+  "train_each_nonconflicting_weights",
+  trainEachWeightsFlags, trainEachWeightsArgs)
+trainEachWeightsOk = trainEachWeightsOk and filesExist([
+  os.path.join(trainEachWeightsOutputDir, "a.target.psms.tsv"),
+  os.path.join(trainEachWeightsOutputDir, "a.target.target.psms.tsv"),
+  os.path.join(trainEachWeightsOutputDir, "a.weights.txt"),
+  os.path.join(trainEachWeightsOutputDir, "a.target.weights.txt"),
+])
+T.doTest(trainEachWeightsOk)
 
 # if no errors were encountered, succeed
 if T.failures == 0:

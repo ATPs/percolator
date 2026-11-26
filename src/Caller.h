@@ -171,9 +171,12 @@ class Caller {
   void writeResults(Scores& allScores, bool unique, bool writeOutput);
   void calculateProteinProbabilities(Scores& allScores);
   void checkIsWritable(const std::string& filePath);
-  // inputFiles holds (description, file name) pairs
+  // Both lists hold (description, file name) pairs. additionalOutputs lets
+  // independent input runs validate the whole batch before writing results.
   void checkOutputFiles(
-      const std::vector<std::pair<std::string, std::string> >& inputFiles)
+      const std::vector<std::pair<std::string, std::string> >& inputFiles,
+      const std::vector<std::pair<std::string, std::string> >& additionalOutputs
+          = {})
       const;
 };
 

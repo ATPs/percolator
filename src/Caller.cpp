@@ -1517,7 +1517,8 @@ bool isSameFile(const std::string& a, const std::string& b) {
  * replaces the first.
  */
 void Caller::checkOutputFiles(
-    const std::vector<std::pair<std::string, std::string> >& inputFiles)
+    const std::vector<std::pair<std::string, std::string> >& inputFiles,
+    const std::vector<std::pair<std::string, std::string> >& additionalOutputs)
     const {
   std::vector<std::pair<const char*, const std::string*>> outputs = {
       {"PSM results", &psmResultFN_},
@@ -1528,6 +1529,9 @@ void Caller::checkOutputFiles(
       {"decoy protein results", &decoyProteinResultFN_},
       {"tab-delimited output (-J)", &tabOutputFN_},
       {"weights (-w)", &weightOutputFN_}};
+  for (const auto& output : additionalOutputs) {
+    outputs.emplace_back(output.first.c_str(), &output.second);
+  }
   for (const auto& spec : perInputOutputSpecs_) {
     outputs.emplace_back("per-input PSM results", &spec.targetPsms);
     outputs.emplace_back("per-input decoy PSM results", &spec.decoyPsms);
@@ -1863,56 +1867,77 @@ int Caller::run() {
     }
     const auto configuredSeed = PseudoRandom::getSeed();
     const unsigned int configuredNestedBins = nestedXvalBins_;
-    for (std::vector<PerInputOutputPlanner::Entry>::const_iterator it =
-             entries.begin();
-         it != entries.end(); ++it) {
-      PerInputOutputPlanner::FixedOutputs fixed =
-          PerInputOutputPlanner::buildFixedOutputs(
-              outputEachFolderPath_, *it, outputEachTargetPeptides_,
-              outputEachDecoyPeptides_, outputEachTargetPsms_,
-              outputEachDecoyPsms_);
+    const std::string configuredDecoyPrefix = protEstimatorDecoyPrefix_;
 
-      peptideResultFN_ = fixed.targetPeptides;
-      decoyPeptideResultFN_ = fixed.decoyPeptides;
-      psmResultFN_ = fixed.targetPsms;
-      decoyPsmResultFN_ = fixed.decoyPsms;
+    struct InputOutputs {
+      PerInputOutputPlanner::FixedOutputs results;
+      std::string tab, weights, proteins, decoyProteins;
+    };
+    std::vector<InputOutputs> plans;
+    std::vector<std::pair<std::string, std::string>> plannedOutputs;
+    auto templateOutput = [&](bool enabled,
+                              const PerInputOutputPlanner::Entry& entry,
+                              const std::string& fileName) {
+      return enabled ? PerInputOutputPlanner::buildTemplateOutput(
+                           outputEachFolderPath_, entry, fileName)
+                     : std::string();
+    };
+    for (const auto& entry : entries) {
+      InputOutputs plan;
+      plan.results = PerInputOutputPlanner::buildFixedOutputs(
+          outputEachFolderPath_, entry, outputEachTargetPeptides_,
+          outputEachDecoyPeptides_, outputEachTargetPsms_,
+          outputEachDecoyPsms_);
+      plan.tab = templateOutput(outputEachExtraTab_, entry,
+                                tabOutputTemplateFN_);
+      plan.weights = templateOutput(outputEachExtraWeight_, entry,
+                                    weightOutputTemplateFN_);
+      plan.proteins = templateOutput(outputEachExtraProtein_, entry,
+                                     proteinResultTemplateFN_);
+      plan.decoyProteins = templateOutput(outputEachExtraDecoyProtein_, entry,
+                                          decoyProteinResultTemplateFN_);
+      plannedOutputs.emplace_back("PSM results", plan.results.targetPsms);
+      plannedOutputs.emplace_back("decoy PSM results", plan.results.decoyPsms);
+      plannedOutputs.emplace_back("peptide results", plan.results.targetPeptides);
+      plannedOutputs.emplace_back("decoy peptide results",
+                                  plan.results.decoyPeptides);
+      plannedOutputs.emplace_back("tab-delimited output (-J)", plan.tab);
+      plannedOutputs.emplace_back("weights (-w)", plan.weights);
+      plannedOutputs.emplace_back("protein results", plan.proteins);
+      plannedOutputs.emplace_back("decoy protein results", plan.decoyProteins);
+      plans.push_back(std::move(plan));
+    }
+    auto inputs = protectedInputFiles_;
+    for (const auto& path : expandedInputPaths) {
+      inputs.emplace_back("input file", path);
+    }
+    checkOutputFiles(inputs, plannedOutputs);
 
-      tabOutputFN_ =
-          outputEachExtraTab_
-              ? PerInputOutputPlanner::buildTemplateOutput(
-                    outputEachFolderPath_, *it, tabOutputTemplateFN_)
-              : "";
-      weightOutputFN_ =
-          outputEachExtraWeight_
-              ? PerInputOutputPlanner::buildTemplateOutput(
-                    outputEachFolderPath_, *it, weightOutputTemplateFN_)
-              : "";
-      proteinResultFN_ =
-          outputEachExtraProtein_
-              ? PerInputOutputPlanner::buildTemplateOutput(
-                    outputEachFolderPath_, *it, proteinResultTemplateFN_)
-              : "";
-      decoyProteinResultFN_ =
-          outputEachExtraDecoyProtein_
-              ? PerInputOutputPlanner::buildTemplateOutput(
-                    outputEachFolderPath_, *it, decoyProteinResultTemplateFN_)
-              : "";
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+      const auto& entry = entries[index];
+      const auto& plan = plans[index];
+      peptideResultFN_ = plan.results.targetPeptides;
+      decoyPeptideResultFN_ = plan.results.decoyPeptides;
+      psmResultFN_ = plan.results.targetPsms;
+      decoyPsmResultFN_ = plan.results.decoyPsms;
+      tabOutputFN_ = plan.tab;
+      weightOutputFN_ = plan.weights;
+      proteinResultFN_ = plan.proteins;
+      decoyProteinResultFN_ = plan.decoyProteins;
 
       perInputOutputSpecs_.clear();
-      inputFNs_.assign(1, it->materializedPath);
-      inputFN_ = it->materializedPath;
+      inputFNs_.assign(1, entry.materializedPath);
+      inputFN_ = entry.materializedPath;
       useMixMax_ = useMixMaxBase_;
 
       if (VERB > 0) {
-        std::cerr << "Processing input file: " << it->originalPath << std::endl;
+        std::cerr << "Processing input file: " << entry.originalPath << std::endl;
       }
-      auto inputs = protectedInputFiles_;
-      for (const auto& path : expandedInputPaths) inputs.emplace_back("input file", path);
-      checkOutputFiles(inputs);
       if (configuredProteinEstimator) {
         protEstimator_ = std::make_unique<PickedProteinInterface>(
             *configuredProteinEstimator);
       }
+      protEstimatorDecoyPrefix_ = configuredDecoyPrefix;
       check_ = configuredCheck;
       PseudoRandom::setSeed(configuredSeed);
       nestedXvalBins_ = configuredNestedBins;
