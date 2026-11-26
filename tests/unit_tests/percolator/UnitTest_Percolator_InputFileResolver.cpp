@@ -17,35 +17,68 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <fstream>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
-
-#include <boost/filesystem.hpp>
 #include <zlib.h>
 
 #include "InputFileResolver.h"
 #include "MyException.h"
+#include "TmpDir.h"
 
 namespace {
 
+namespace fs = std::filesystem;
+
+fs::path makeUniqueTempDir(const std::string& prefix) {
+  static std::mt19937_64 generator(std::random_device{}());
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    fs::path path = fs::temp_directory_path() /
+                    (prefix + std::to_string(generator()));
+    std::error_code error;
+    if (fs::create_directory(path, error)) {
+      return path;
+    }
+  }
+  throw std::runtime_error("Could not create a unique temporary directory");
+}
+
 class ScopedTempDir {
  public:
-  ScopedTempDir() {
-    path_ = boost::filesystem::temp_directory_path() /
-            boost::filesystem::unique_path("percolator-resolver-%%%%-%%%%");
-    boost::filesystem::create_directories(path_);
+  ScopedTempDir() : path_(makeUniqueTempDir("percolator-resolver-")) {}
+
+  ~ScopedTempDir() {
+    std::error_code error;
+    fs::remove_all(path_, error);
   }
 
-  ~ScopedTempDir() { boost::filesystem::remove_all(path_); }
-
-  boost::filesystem::path path() const { return path_; }
+  fs::path path() const { return path_; }
 
  private:
-  boost::filesystem::path path_;
+  fs::path path_;
 };
 
-void writeTextFile(const boost::filesystem::path& path,
+class ScopedTmpRoot {
+ public:
+  explicit ScopedTmpRoot(const fs::path& path) : path_(path) {
+    fs::create_directories(path_);
+    TmpDir::setTempRoot(path_.string());
+  }
+
+  ~ScopedTmpRoot() {
+    TmpDir::cleanupAll();
+    TmpDir::setTempRoot("");
+  }
+
+ private:
+  fs::path path_;
+};
+
+void writeTextFile(const fs::path& path,
                    const std::string& content) {
   std::ofstream out(path.string().c_str(), std::ios::binary);
   ASSERT_TRUE(out.is_open());
@@ -53,11 +86,34 @@ void writeTextFile(const boost::filesystem::path& path,
   out.close();
 }
 
+bool writeGzipFile(const fs::path& path, const std::string& content) {
+  gzFile out = gzopen(path.string().c_str(), "wb");
+  if (out == NULL) {
+    return false;
+  }
+  const int bytesWritten =
+      gzwrite(out, content.data(), static_cast<unsigned int>(content.size()));
+  const int closeStatus = gzclose(out);
+  return bytesWritten == static_cast<int>(content.size()) &&
+         closeStatus == Z_OK;
+}
+
+void expectGzipFailureCleansTempFiles(const fs::path& source,
+                                      const fs::path& tempRoot) {
+  EXPECT_THROW(InputFileResolver::materializeGzipInputs(
+                   std::vector<std::string>(1, source.string())),
+               MyException);
+
+  TmpDir::cleanupAll();
+  EXPECT_TRUE(fs::exists(source));
+  EXPECT_TRUE(fs::is_empty(tempRoot));
+}
+
 }  // namespace
 
 TEST(InputFileResolverTest, ReadInputFileListParsesCommentsAndWhitespace) {
   ScopedTempDir tempDir;
-  boost::filesystem::path listPath = tempDir.path() / "inputs.txt";
+  fs::path listPath = tempDir.path() / "inputs.txt";
 
   writeTextFile(listPath,
                 "   # comment\n"
@@ -77,8 +133,8 @@ TEST(InputFileResolverTest, ReadInputFileListParsesCommentsAndWhitespace) {
 
 TEST(InputFileResolverTest, ExpandPatternsMatchesWildcardEntries) {
   ScopedTempDir tempDir;
-  boost::filesystem::create_directories(tempDir.path() / "a");
-  boost::filesystem::create_directories(tempDir.path() / "b");
+  std::filesystem::create_directories(tempDir.path() / "a");
+  std::filesystem::create_directories(tempDir.path() / "b");
   writeTextFile(tempDir.path() / "a" / "one.pin.gz", "x");
   writeTextFile(tempDir.path() / "b" / "two.pin.gz", "x");
 
@@ -101,12 +157,12 @@ TEST(InputFileResolverTest, ExpandPatternsThrowsOnUnmatchedWildcard) {
 
 TEST(InputFileResolverTest, DeduplicateKeepFirstPreservesOrder) {
   ScopedTempDir tempDir;
-  boost::filesystem::path dir = tempDir.path() / "data";
-  boost::filesystem::create_directories(dir);
-  boost::filesystem::path filePath = dir / "in.pin";
+  fs::path dir = tempDir.path() / "data";
+  std::filesystem::create_directories(dir);
+  fs::path filePath = dir / "in.pin";
   writeTextFile(filePath, "x");
 
-  boost::filesystem::path equivalent = dir / "." / "in.pin";
+  fs::path equivalent = dir / "." / "in.pin";
   std::vector<std::string> input;
   input.push_back(filePath.string());
   input.push_back(equivalent.string());
@@ -121,7 +177,7 @@ TEST(InputFileResolverTest, DeduplicateKeepFirstPreservesOrder) {
 
 TEST(InputFileResolverTest, MaterializeGzipInputsCreatesTabReadableFile) {
   ScopedTempDir tempDir;
-  boost::filesystem::path gzPath = tempDir.path() / "input.pin.gz";
+  fs::path gzPath = tempDir.path() / "input.pin.gz";
 
   std::string contents =
       "id\tLabel\tFeature\tPeptide\tProtein\n"
@@ -142,4 +198,38 @@ TEST(InputFileResolverTest, MaterializeGzipInputsCreatesTabReadableFile) {
   std::string firstLine;
   ASSERT_TRUE(static_cast<bool>(std::getline(in, firstLine)));
   EXPECT_NE(std::string::npos, firstLine.find('\t'));
+}
+
+TEST(InputFileResolverTest, MalformedGzipCleansTemporaryDirectory) {
+  ScopedTempDir tempDir;
+  const fs::path tempRoot = tempDir.path() / "temp";
+  ScopedTmpRoot configuredRoot(tempRoot);
+  const fs::path source = tempDir.path() / "malformed.pin.gz";
+
+  // A valid gzip header followed by a DEFLATE block with reserved BTYPE=3.
+  const unsigned char malformedBytes[] = {0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00,
+                                          0x00, 0x00, 0x00, 0x03, 0x07};
+  std::ofstream out(source, std::ios::binary);
+  ASSERT_TRUE(out.is_open());
+  out.write(reinterpret_cast<const char*>(malformedBytes),
+            sizeof(malformedBytes));
+  out.close();
+  ASSERT_TRUE(out.good());
+
+  expectGzipFailureCleansTempFiles(source, tempRoot);
+}
+
+TEST(InputFileResolverTest, TruncatedGzipFooterCleansTemporaryDirectory) {
+  ScopedTempDir tempDir;
+  const fs::path tempRoot = tempDir.path() / "temp";
+  ScopedTmpRoot configuredRoot(tempRoot);
+  const fs::path source = tempDir.path() / "truncated.pin.gz";
+  const std::string contents = "valid gzip contents before truncated footer\n";
+  ASSERT_TRUE(writeGzipFile(source, contents));
+
+  const auto size = fs::file_size(source);
+  ASSERT_GT(size, 4u);
+  fs::resize_file(source, size - 4u);
+
+  expectGzipFailureCleansTempFiles(source, tempRoot);
 }

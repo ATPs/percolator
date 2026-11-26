@@ -18,11 +18,11 @@ set(PERLUQVAL_VERSION "v${CPACK_PACKAGE_VERSION_MAJOR}-${CPACK_PACKAGE_VERSION_M
 IF(APPLE)
 	set(CPACK_GENERATOR productbuild)
 	set(CPACK_COMPONENTS_ALL Unspecified)
-  set(CMAKE_INSTALL_PREFIX /usr/local)
+  # CMAKE_INSTALL_PREFIX is not set here: it defaults to /usr/local on macOS,
+  # and a conda build must install into $PREFIX.
   set(CPACK_PACKAGING_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX})
   set(CPACK_PACKAGE_FILE_NAME "${PACKAGE_NICKNAME}-${PERLUQVAL_VERSION}-osx-${TARGET_ARCH}")
   set(CPACK_SOURCE_PACKAGE_FILE_NAME  "${PACKAGE_NICKNAME}-${PERLUQVAL_VERSION}-osx-src")
-	set(CMAKE_OSX_ARCHITECTURES ${TARGET_ARCH} CACHE STRING "Build architectures for OSX" FORCE)
 	set(CPACK_PACKAGE_ICON "${PERCOLATOR_SOURCE_DIR}/admin/win/nsi/percolator.ico")
 	set(CPACK_BUNDLE_NAME ${PACKAGE_NICKNAME})
 elseif(UNIX)
@@ -81,6 +81,18 @@ if(UNIX)
         set(LINUX_NAME "CentOS_${CMAKE_MATCH_1}")
         set(CPACK_GENERATOR "RPM")
       endif(LINUX_ISSUE MATCHES "CentOS")
+      # AlmaLinux case
+      if(LINUX_ISSUE MATCHES "AlmaLinux")
+        string(REGEX MATCH "release ([0-9]+\\.[0-9]+)" ALMALINUX "${LINUX_ISSUE}")
+        set(LINUX_NAME "AlmaLinux_${CMAKE_MATCH_1}")
+        set(CPACK_GENERATOR "RPM")
+      endif(LINUX_ISSUE MATCHES "AlmaLinux")
+      # Rocky Linux case
+      if(LINUX_ISSUE MATCHES "Rocky")
+        string(REGEX MATCH "release ([0-9]+\\.[0-9]+)" ROCKY "${LINUX_ISSUE}")
+        set(LINUX_NAME "Rocky_${CMAKE_MATCH_1}")
+        set(CPACK_GENERATOR "RPM")
+      endif(LINUX_ISSUE MATCHES "Rocky")
       # Ubuntu case
       if(LINUX_ISSUE MATCHES "Ubuntu")
         string(REGEX MATCH "buntu ([0-9]+\\.[0-9]+)" UBUNTU "${LINUX_ISSUE}")
@@ -116,9 +128,22 @@ if( CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS )
     install( PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION bin COMPONENT System )
 endif( CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS )
 
+set(CPACK_PACKAGE_DESCRIPTION
+"Percolator rescores the peptide-spectrum matches (PSMs) of a shotgun
+proteomics database search with a semi-supervised linear SVM trained on
+target and decoy PSMs, and reports q values and posterior error
+probabilities for PSMs, peptides and proteins. qvality estimates q values
+and posterior error probabilities from lists of target and decoy scores.")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/percolator/percolator")
+
 # PACKAGING OPTIONS: DEB
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Lukas Kall <lukas.kall@scilifelab.se>")
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE ${TARGET_ARCH})
+set(CPACK_DEBIAN_PACKAGE_SECTION "science")
+# Depends is computed from the shared libraries the binaries need (e.g.
+# libc6, libgomp1, libstdc++6), so the package cannot be installed where
+# they are missing or too old.
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 
 # PACKAGING OPTIONS: RPM
@@ -126,3 +151,5 @@ set(CPACK_RPM_PACKAGE_LICENSE "Apache 2.0 license")
 set(CPACK_RPM_PACKAGE_VENDOR "Percolator")
 set(CPACK_RPM_PACKAGE_GROUP "Applications/Engineering")
 set(CPACK_RPM_PACKAGE_RELOCATABLE FALSE)
+set(CPACK_RPM_PACKAGE_DESCRIPTION "${CPACK_PACKAGE_DESCRIPTION}")
+# rpmbuild adds the shared-library requirements itself (AutoReq)

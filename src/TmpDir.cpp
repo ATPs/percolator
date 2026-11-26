@@ -1,135 +1,92 @@
 #include "TmpDir.h"
 
-#include <cstdlib>
+#include <filesystem>
+#include <iomanip>
+#include <memory>
 #include <mutex>
+#include <random>
+#include <sstream>
 #include <vector>
 
+#include "MyException.h"
+
 namespace {
-std::vector<std::string>& tempDirectories() {
-  static std::vector<std::string> dirs;
-  return dirs;
-}
-
-std::mutex& tempDirectoriesMutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-std::once_flag& cleanupRegistrationFlag() {
-  static std::once_flag flag;
-  return flag;
-}
-
-std::string& configuredTempRoot() {
-  static std::string path;
-  return path;
+struct TempState {
+  std::mutex mutex;
+  std::string root;
+  std::vector<std::unique_ptr<TmpDir>> directories;
+};
+TempState& tempState() {
+  static TempState state;
+  return state;
 }
 }  // namespace
 
-void TmpDir::setTempRoot(const std::string& tempRoot) {
-  std::lock_guard<std::mutex> lock(tempDirectoriesMutex());
-  configuredTempRoot() = tempRoot;
+void TmpDir::setTempRoot(const std::string& root) {
+  std::lock_guard<std::mutex> lock(tempState().mutex);
+  tempState().root = root;
 }
 
-void TmpDir::registerForCleanup(const std::string& tempDir) {
-  if (tempDir.empty()) {
-    return;
-  }
+TmpDir::TmpDir() {
+  namespace fs = std::filesystem;
+  std::string configuredRoot;
   {
-    std::lock_guard<std::mutex> lock(tempDirectoriesMutex());
-    tempDirectories().push_back(tempDir);
+    std::lock_guard<std::mutex> lock(tempState().mutex);
+    configuredRoot = tempState().root;
   }
-  std::call_once(cleanupRegistrationFlag(), []() {
-    std::atexit(&TmpDir::cleanupAll);
-  });
+  try {
+    std::vector<fs::path> roots;
+    if (configuredRoot.empty()) {
+      std::error_code ec;
+      const auto cwd = fs::current_path(ec);
+      if (!ec) roots.push_back(cwd);
+      roots.push_back(fs::temp_directory_path());
+    } else {
+      roots.push_back(fs::absolute(configuredRoot).lexically_normal());
+    }
+    std::random_device seed;
+    std::mt19937_64 generator(seed());
+    std::error_code lastError;
+    for (const auto& root : roots) {
+      fs::create_directories(root, lastError);
+      if (lastError) continue;
+      for (;;) {
+        std::ostringstream name;
+        name << ".percolator-tmp-" << std::hex << std::setw(16)
+             << std::setfill('0') << generator();
+        const auto dir = root / name.str();
+        if (fs::create_directory(dir, lastError)) {
+          path_ = dir.string();
+          return;
+        }
+        if (lastError) break;
+      }
+    }
+    throw MyException("ERROR: Could not create a temporary directory: " +
+                      lastError.message() + "\n");
+  } catch (const fs::filesystem_error& e) {
+    throw MyException(std::string("ERROR: Could not create a temporary ") +
+                      "directory: " + e.what() + "\n");
+  }
+}
+
+TmpDir::~TmpDir() {
+  std::error_code ec;
+  std::filesystem::remove_all(path_, ec);
+}
+
+void TmpDir::createTempFile(std::string& file, std::string& directory) {
+  auto owner = std::make_unique<TmpDir>();
+  directory = owner->getPath();
+  file = (std::filesystem::path(directory) / "converters-tmp.tcb").string();
+  std::lock_guard<std::mutex> lock(tempState().mutex);
+  tempState().directories.push_back(std::move(owner));
 }
 
 void TmpDir::cleanupAll() {
-  std::vector<std::string> dirs;
+  std::vector<std::unique_ptr<TmpDir>> directories;
   {
-    std::lock_guard<std::mutex> lock(tempDirectoriesMutex());
-    dirs.swap(tempDirectories());
-  }
-
-  for (std::vector<std::string>::const_iterator it = dirs.begin();
-       it != dirs.end(); ++it) {
-    try {
-      if (boost::filesystem::is_directory(*it)) {
-        boost::filesystem::remove_all(*it);
-      }
-    } catch (const boost::filesystem::filesystem_error&) {
-      // Best-effort cleanup for temporary files.
-    }
-  }
-}
-
-void TmpDir::createTempFile(std::string& tcf, std::string& tcd) {
-  //TODO it would be nice to somehow avoid these declararions and therefore avoid the linking to
-  //boost filesystem when we don't use them      
-  tcf.clear();
-  tcd.clear();
-
-  const boost::filesystem::path file("converters-tmp.tcb");
-  const boost::filesystem::path uniqueName =
-      boost::filesystem::unique_path(".percolator-tmp-%%%%-%%%%-%%%%");
-
-  auto tryCreateInRoot = [&](const boost::filesystem::path& root) -> bool {
-    try {
-      const boost::filesystem::path dir = root / uniqueName;
-      if (boost::filesystem::is_directory(dir)) {
-        boost::filesystem::remove_all(dir);
-      }
-      boost::filesystem::create_directory(dir);
-      tcf = std::string((dir / file).string());
-      tcd = dir.string();
-      registerForCleanup(tcd);
-      return true;
-    } catch (const boost::filesystem::filesystem_error&) {
-      return false;
-    }
-  };
-
-  std::string tempRootOverride;
-  {
-    std::lock_guard<std::mutex> lock(tempDirectoriesMutex());
-    tempRootOverride = configuredTempRoot();
-  }
-
-  if (!tempRootOverride.empty()) {
-    try {
-      boost::filesystem::path configuredRoot(tempRootOverride);
-      if (!configuredRoot.is_absolute()) {
-        configuredRoot =
-            boost::filesystem::absolute(configuredRoot).lexically_normal();
-      }
-      if (!boost::filesystem::exists(configuredRoot)) {
-        boost::filesystem::create_directories(configuredRoot);
-      }
-      if (tryCreateInRoot(configuredRoot)) {
-        return;
-      }
-      std::cerr << "Failed to create temporary directory under --temp-folder "
-                << configuredRoot.string() << std::endl;
-      return;
-    } catch (const boost::filesystem::filesystem_error& e) {
-      std::cerr << e.what() << std::endl;
-      return;
-    }
-  }
-
-  boost::system::error_code ec;
-  const boost::filesystem::path cwd = boost::filesystem::current_path(ec);
-  if (!ec && tryCreateInRoot(cwd)) {
-    return;
-  }
-
-  try {
-    if (!tryCreateInRoot(boost::filesystem::temp_directory_path())) {
-      std::cerr << "Failed to create temporary directory in current working "
-                   "directory and system temporary directory."
-                << std::endl;
-    }
-  } catch (const boost::filesystem::filesystem_error& e) {
-    std::cerr << e.what() << std::endl;
+    std::lock_guard<std::mutex> lock(tempState().mutex);
+    directories.swap(tempState().directories);
   }
 }

@@ -9,191 +9,150 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 MESSAGE( STATUS "Checking packages:" )
 
-if(XML_SUPPORT)
-  find_package(XercesC REQUIRED) # XSD DEPENDS ON ${XERCESC_FOUND}
-  if(XERCESC_FOUND)
-    message(STATUS "Found Xerces-C: ${XERCESC_LIBRARIES}")
-    message(STATUS "              : ${XERCESC_INCLUDE_DIR}")
-    message(STATUS "       Version: ${XERCESC_VERSION}")
-  else(XERCESC_FOUND)
-    message(FATAL_ERROR "The package Apache Xerces-C++ has not been found")
-  endif(XERCESC_FOUND)
-  include_directories(${XERCESC_INCLUDE_DIR})
-
-  find_package(Threads REQUIRED) # XERCESC depends on pthread
-
-  if(APPLE OR MINGW)
-    find_package(CURL REQUIRED) # XERCESC depends on curl
-  endif()
-
-  message(STATUS "Locating CodeSynthesis library with XSDDIR set to $ENV{XSDDIR}")
-  find_package(Xsd REQUIRED) # CODESYNTHESIS
-  if(XSD_FOUND)
-    message(STATUS "Package CodeSynthesis XSD found: ${XSD_INCLUDE_DIR}, ${XSD_EXECUTABLE}")
-  else(XSD_FOUND)
-    message(FATAL_ERROR "The package CodeSynthesis XSD has not been found")
-  endif(XSD_FOUND)
-  include_directories(${XSD_INCLUDE_DIR})
-
-  if(UNIX)
-      set(CMAKE_PREFIX_PATH ${RPCDIR})
-      find_package(RPC QUIET)
-      set(HAVE_RPC ${RPC_FOUND})
-      if(RPC_FOUND)
-          message(STATUS "RPC found, will include headers from: ${RPC_INCLUDE_DIR}")
-          message(STATUS "and libraries from                  : ${RPC_LIBRARIES}")
-          set(LIBRARIES ${LIBRARIES} ${RPC_LIBRARIES})
-          include_directories(${RPC_INCLUDE_DIR})
-      else(RPC_FOUND)
-          message(FATAL_ERROR "RPC support is mandatory.\n"
-          "Note that SunRPC has been removed in glibc-2.26 and later, "
-          "while being optional in earlier versions. Consider using the "
-          "recommended and more modern libtirpc instead.\n"
-          "Use -DRPCDIR=DIR to specify the rpc directory tree.\n")
-      endif(RPC_FOUND)
-  endif()
-endif(XML_SUPPORT)
-
-if(APPLE AND OPENMP_FOUND)
-  include_directories(${OpenMP_CXX_INCLUDE_DIRS})
-endif(APPLE AND OPENMP_FOUND)
-
-# Boost header libraries only for async io header library (asio.hpp)
-find_package(Boost ${BOOST_MIN_VERSION} COMPONENTS filesystem system REQUIRED)
-add_definitions(-DBOOST_SYSTEM_NO_DEPRECATED)
-add_definitions(-DBOOST_ERROR_CODE_HEADER_ONLY)
-if(WIN32)
-  add_definitions(-DBOOST_ALL_NO_LIB) # disable autolinking in boost
-endif(WIN32)
-include_directories(${Boost_INCLUDE_DIRS})
-
 find_package(ZLIB REQUIRED)
-include_directories(${ZLIB_INCLUDE_DIRS})
-
-#########################################
-# COMPILE BLAS
-#########################################
-add_subdirectory(dblas)
-set (DBLAS_LIBRARIES ${DBLAS_LIBRARIES} dblas)
-
-###############################################################################
-# PULL Eigen
-###############################################################################
-
-include(FetchContent)
-
-# Avoid Eigen's conflicting 'blas' target
-set(EIGEN_BUILD_BLAS OFF CACHE BOOL "" FORCE)
-set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
-set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
-
-# Avoid adding Eigen's blas directory (explicitly ignore it)
-set(EIGEN_DISABLE_BLAS ON CACHE BOOL "Disable Eigen's BLAS build" FORCE)
-
-FetchContent_Declare(
-  eigen
-  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-  GIT_TAG 3.4.0
-)
-
-FetchContent_MakeAvailable(eigen)
-include_directories(${eigen_SOURCE_DIR})
-
-### Patch for avoiding _finite
-
-set(EIGEN_MATHFUNCTIONS_FILE "${eigen_SOURCE_DIR}/Eigen/src/Core/MathFunctions.h")
-
-# Do the patch if not already patched
-file(READ "${EIGEN_MATHFUNCTIONS_FILE}" MATHFUNCS_CONTENT)
-
-string(REGEX REPLACE
-  "#elif EIGEN_USE_STD_FPCLASSIFY[ \r\n]+[^\r\n]*using std::isfinite;[ \r\n]+[^\r\n]*return isfinite[^\r\n]*;"
-  "#elif EIGEN_USE_STD_FPCLASSIFY\n    return !std::isnan(x) && !std::isinf(x); // PATCHED to avoid std::isfinite on MSVC"
-  MATHFUNCS_CONTENT_PATCHED
-  "${MATHFUNCS_CONTENT}"
-)
-
-file(WRITE "${EIGEN_MATHFUNCTIONS_FILE}" "${MATHFUNCS_CONTENT_PATCHED}")
-### End patch
-
-###############################################################################
-# RUN CODESYNTHESIS
-###############################################################################
-
-if(XML_SUPPORT)
-  add_definitions(-DXSD_CXX11)
-  if(MINGW OR WIN32)
-    set(xdr_flags)
-  else()
-    set(xdr_flags --generate-insertion XDR --generate-extraction XDR --std c++11)
-  endif()
-
-  # Generate percolator_in
-  set(xsdfiles_in ${CMAKE_CURRENT_BINARY_DIR}/percolator_in.cxx ${CMAKE_CURRENT_BINARY_DIR}/percolator_in.hxx)
-  set(percolator_in xml/percolator_in.xsd)
-  add_custom_command(
-    OUTPUT ${xsdfiles_in}
-    COMMAND ${XSD_EXECUTABLE} cxx-tree --generate-serialization ${xdr_flags} --root-element-all
-            --namespace-map ${percolator-in-namespace}=percolatorInNs
-            ${CMAKE_CURRENT_SOURCE_DIR}/${percolator_in}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${percolator_in}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating percolator_in.* from XSD"
-  )
-
-  # Generate percolator_out
-  set(xsdfiles_out ${CMAKE_CURRENT_BINARY_DIR}/percolator_out.cxx ${CMAKE_CURRENT_BINARY_DIR}/percolator_out.hxx)
-  set(percolator_out xml/percolator_out.xsd)
-  add_custom_command(
-    OUTPUT ${xsdfiles_out}
-    COMMAND ${XSD_EXECUTABLE} cxx-tree --generate-serialization ${xdr_flags} --root-element-all
-            --namespace-map ${percolator-out-namespace}=percolatorOutNs
-            ${CMAKE_CURRENT_SOURCE_DIR}/${percolator_out}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${percolator_out}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating percolator_out.* from XSD"
-  )
-
-  # 👇 This is the critical part!
-  add_custom_target(generate_xsd ALL DEPENDS ${xsdfiles_in} ${xsdfiles_out})
+set(COMMON_LIBRARIES ZLIB::ZLIB)
+find_package(OpenMP)
+# Help AppleClang find Homebrew's libomp if not auto-detected. Conda builds
+# turn this off, so that they never link to a library outside the environment.
+option(HOMEBREW_LIBOMP "On macOS, fall back to Homebrew's libomp if OpenMP is not found" ON)
+if(APPLE AND NOT OpenMP_CXX_FOUND AND HOMEBREW_LIBOMP)
+  # Homebrew prefixes on Apple silicon and on Intel
+  foreach(_HOMEBREW_OMP_ROOT "/opt/homebrew/opt/libomp" "/usr/local/opt/libomp")
+    if (EXISTS "${_HOMEBREW_OMP_ROOT}/include" AND EXISTS "${_HOMEBREW_OMP_ROOT}/lib")
+      # Link the static library where there is one, so that the binary
+      # runs without Homebrew
+      set(_HOMEBREW_OMP_LIBRARY "${_HOMEBREW_OMP_ROOT}/lib/libomp.a")
+      if (NOT EXISTS "${_HOMEBREW_OMP_LIBRARY}")
+        set(_HOMEBREW_OMP_LIBRARY "${_HOMEBREW_OMP_ROOT}/lib/libomp.dylib")
+      endif()
+      # Hint include/lib to CMake's OpenMP finder
+      set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp" CACHE STRING "" FORCE)
+      set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
+      set(OpenMP_omp_LIBRARY "${_HOMEBREW_OMP_LIBRARY}" CACHE FILEPATH "" FORCE)
+      include_directories("${_HOMEBREW_OMP_ROOT}/include")
+      # Retry discovery
+      find_package(OpenMP)
+      break()
+    endif()
+  endforeach()
 endif()
+if (OpenMP_CXX_FOUND)
+    list(APPEND COMMON_LIBRARIES OpenMP::OpenMP_CXX)
+    # With STATIC on Linux, FindOpenMP takes libgomp.a, which calls dlopen
+    # and dlsym. Before glibc 2.34 they are in libdl, not in libc (the
+    # manylinux_2_28 wheels and the portable build), so libdl follows it.
+    if(UNIX AND NOT APPLE AND STATIC)
+      list(APPEND COMMON_LIBRARIES ${CMAKE_DL_LIBS})
+    endif()
+else()
+  message(WARNING "OpenMP was not found, so percolator will run on one "
+                  "thread only. On macOS, install libomp (brew install libomp).")
+endif()
+
+
+
+# Make find_package honor UPPER-CASE <PKG>_ROOT variables (CMake 3.30+)
+if(POLICY CMP0074)
+  cmake_policy(SET CMP0074 NEW)
+endif()
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 NEW)
+endif()
+if(POLICY CMP0177)
+  cmake_policy(SET CMP0177 NEW)
+endif()
+
+
+
+if(MSVC)
+  add_definitions (/MP /D _CRT_SECURE_NO_WARNINGS /D _CRT_NONSTDC_NO_DEPRECATE)
+endif(MSVC)
+
+
+if (MSVC)
+  add_compile_definitions(
+    _HAS_STD_BYTE=0     # disables std::byte so 'byte' in Windows headers is unambiguous
+    NOMINMAX            # avoid macro min/max conflicts
+    _WIN32_WINNT=0x0601 # silence that SDK warning (Windows 7 or higher)
+  )
+endif()
+
+#########################################
+# STANDARD LIBRARY FEATURES
+#########################################
+# std::to_chars and std::from_chars for double are missing from older
+# standard libraries (GCC before 11), and libc++ provides them on macOS only
+# from some deployment targets on, without announcing them with
+# __cpp_lib_to_chars. The code falls back to slower equivalents without them.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#include <charconv>
+int main() {
+  char buf[32];
+  double value = 0.5;
+  return std::to_chars(buf, buf + sizeof(buf), value,
+                       std::chars_format::general, 6).ec == std::errc() ? 0 : 1;
+}" PERCOLATOR_HAVE_TO_CHARS_DOUBLE)
+check_cxx_source_compiles("
+#include <charconv>
+int main() {
+  const char text[] = \"0.5\";
+  double value = 0.0;
+  return std::from_chars(text, text + 3, value).ec == std::errc() ? 0 : 1;
+}" PERCOLATOR_HAVE_FROM_CHARS_DOUBLE)
+set(PERCOLATOR_CHARCONV_DEFINITIONS "")
+foreach(conversion TO_CHARS FROM_CHARS)
+  if(PERCOLATOR_HAVE_${conversion}_DOUBLE)
+    list(APPEND PERCOLATOR_CHARCONV_DEFINITIONS PERCOLATOR_${conversion}_DOUBLE=1)
+  else()
+    list(APPEND PERCOLATOR_CHARCONV_DEFINITIONS PERCOLATOR_${conversion}_DOUBLE=0)
+  endif()
+endforeach()
+# for every target in this directory and below; perclibrary passes them on
+# to the targets that link it, such as the unit tests
+add_compile_definitions(${PERCOLATOR_CHARCONV_DEFINITIONS})
 
 #############################################################################
 # COMPILE PERCOLATOR
 ###############################################################################
 
-if(XML_SUPPORT)
-  add_library(perclibrary STATIC ${xsdfiles_in} ${xsdfiles_out} parser.cxx serializer.cxx BaseSpline.cpp MassHandler.cpp
-                  PSMDescription.cpp ResultHolder.cpp IsotonicPEP.cpp
-								  XMLInterface.cpp SetHandler.cpp StdvNormalizer.cpp svm.cpp Caller.cpp CompositionSorter.cpp CrossValidation.cpp Enzyme.cpp Globals.cpp NoNormalizer.cpp Normalizer.cpp
+add_library(perclibrary STATIC BaseSpline.cpp MassHandler.cpp PSMDescription.cpp MonotoneRegressor.cpp IsotonicPEP.cpp
+								  SetHandler.cpp StdvNormalizer.cpp Caller.cpp CompositionSorter.cpp CrossValidation.cpp Enzyme.cpp Globals.cpp NoNormalizer.cpp Normalizer.cpp
 								  SanityCheck.cpp UniNormalizer.cpp DataSet.cpp TabFileValidator.cpp FeatureNames.cpp LogisticRegression.cpp Numerical.cpp Option.cpp PosteriorEstimator.cpp
-								  ProteinProbEstimator.cpp ProteinFDRestimator.cpp ScoreHolder.cpp Scores.cpp PseudoRandom.cpp Set.cpp SqtSanityCheck.cpp ssl.cpp PackedVector.cpp
-								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp PerInputOutputPlanner.cpp Vector.cpp)
-  add_dependencies(perclibrary generate_xsd)
-else(XML_SUPPORT)
-  add_library(perclibrary STATIC BaseSpline.cpp MassHandler.cpp ResultHolder.cpp PSMDescription.cpp IsotonicPEP.cpp
-								  XMLInterface.cpp SetHandler.cpp StdvNormalizer.cpp svm.cpp Caller.cpp CompositionSorter.cpp CrossValidation.cpp Enzyme.cpp Globals.cpp NoNormalizer.cpp Normalizer.cpp
-								  SanityCheck.cpp UniNormalizer.cpp DataSet.cpp TabFileValidator.cpp FeatureNames.cpp LogisticRegression.cpp Numerical.cpp Option.cpp PosteriorEstimator.cpp
-								  ProteinProbEstimator.cpp ProteinFDRestimator.cpp ScoreHolder.cpp Scores.cpp PseudoRandom.cpp Set.cpp SqtSanityCheck.cpp ssl.cpp PackedVector.cpp
-								  PackedMatrix.cpp Logger.cpp MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp PerInputOutputPlanner.cpp Vector.cpp)
-endif(XML_SUPPORT)
+								  ProteinProbEstimator.cpp Scores.cpp PseudoRandom.cpp Set.cpp ssl.cpp PackedVector.cpp
+								  MyException.cpp ProteinScoreHolder.cpp PickedProteinInterface.cpp FeatureMemoryPool.cpp Timer.cpp TmpDir.cpp ValidateTabFile.cpp InputFileResolver.cpp PerInputOutputPlanner.cpp Vector.cpp
+								  picked_protein/PickedProteinCaller.cpp picked_protein/ProteinDigest.cpp)
+# BaseSpline.cpp computes in double-double arithmetic, which needs every
+# product and sum rounded on its own: no contraction into fused multiply-adds
+# (GCC contracts by default where the processor has them, Clang within an
+# expression). MSVC 2022 contracts only with /fp:fast or /fp:contract.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set_source_files_properties(BaseSpline.cpp PROPERTIES COMPILE_OPTIONS
+                              "-ffp-contract=off")
+endif()
 
-target_link_libraries(perclibrary PUBLIC ${ZLIB_LIBRARIES})
+if(OpenMP_CXX_FOUND)
+  target_link_libraries(perclibrary PUBLIC ${COMMON_LIBRARIES} OpenMP::OpenMP_CXX)
+else()
+  target_link_libraries(perclibrary PUBLIC ${COMMON_LIBRARIES})
+endif()
+target_compile_definitions(perclibrary INTERFACE ${PERCOLATOR_CHARCONV_DEFINITIONS})
 
-
-###############################################################################
-# COMPILE INTERNAL LIBRARIES
-###############################################################################
-
-#COMPILE PICKED PROTEIN
-add_subdirectory(picked_protein)
+# The picked-protein sources (src/picked_protein) are part of perclibrary:
+# they and PickedProteinInterface.cpp use each other, so two static
+# libraries had to be linked in one order. The target picked_protein remains
+# as a name for targets that link "perclibrary picked_protein"; it builds no
+# library file.
+add_library(picked_protein INTERFACE)
+target_link_libraries(picked_protein INTERFACE perclibrary)
 
 #INCLUDE PERCOLATOR HEADERS
 include_directories(.)
 
-#INCLUDE PICKED PROTEIN HEADERS FOR PERCLIBRARY
+#INCLUDE PICKED PROTEIN HEADERS
 include_directories(picked_protein)
 
 ################################################################################
@@ -205,37 +164,10 @@ if(CRUX)
 ELSE(CRUX)
   add_executable(percolator main.cpp)
 
-  if(APPLE)
-    set_property(TARGET percolator PROPERTY LINK_SEARCH_START_STATIC FALSE)
-    set_property(TARGET percolator PROPERTY LINK_SEARCH_END_STATIC TRUE)
-  elseif(MINGW)
-    set_target_properties(percolator PROPERTIES LINK_FLAGS "-Wl,-Bdynamic -static-libgcc")
-  endif()
-
-  if(PROFILING AND UNIX)
-    set_target_properties(percolator PROPERTIES COMPILE_FLAGS -pg LINK_FLAGS -pg)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 ${PROFILING_COMMON_FLAGS}")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 ${PROFILING_COMMON_FLAGS}")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 ${PROFILING_COMMON_FLAGS}")
-    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 ${PROFILING_COMMON_FLAGS}")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -DNDEBUG ${PROFILING_COMMON_FLAGS}")
-    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g -DNDEBUG ${PROFILING_COMMON_FLAGS}")
-  endif()
-
   # SET LIBRARIES FOR PERCOLATOR
-  set(COMMON_LIBRARIES perclibrary ${DBLAS_LIBRARIES} picked_protein ${XERCESC_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} ${CURL_LIBRARIES} ${RPC_LIBRARIES} ${ZLIB_LIBRARIES})
-  if(NOT MSVC)
-    if(APPLE)
-      set(COMMON_LIBRARIES ${COMMON_LIBRARIES} ${OpenMP_CXX_LIBRARIES})
-    else(APPLE)
-      set(COMMON_LIBRARIES ${COMMON_LIBRARIES} stdc++)
-    endif(APPLE)
-  endif(NOT MSVC)
-  if(COVERAGE)
-    target_link_libraries(percolator -fprofile-arcs ${COMMON_LIBRARIES} ${Boost_LIBRARIES})
-  else(COVERAGE)
-    target_link_libraries(percolator ${COMMON_LIBRARIES} ${Boost_LIBRARIES})
-  endif(COVERAGE)
+  list(APPEND COMMON_LIBRARIES perclibrary picked_protein)
+
+  target_link_libraries(percolator PRIVATE ${COMMON_LIBRARIES})
 
   # INSTALL PERCOLATOR
   install(TARGETS percolator EXPORT PERCOLATOR DESTINATION bin) # Important to use relative path here (used by CPack)!

@@ -21,7 +21,6 @@
 #include <cmath>
 #include <functional>
 #include <cfloat>
-//#include <boost/math/special_functions/gamma.hpp>
 
 #include "MyException.h"
 #include "ProteinProbEstimator.h"
@@ -31,20 +30,11 @@
 #include "PseudoRandom.h"
 
 
-/* 
-* Protein inference methods:
-* 1. Fisher's method for combining p-values
-* 2. Product of Posterior error probabilities (PEPs)
-* 3. Best peptide approach
-*/
-enum ProteinInferenceMethod {
-  FISHER, PEPPROD, BESTPEPT
-};
-
 /*
 * PickedProteinInterface is a class that computes probabilities and statistics based
 * on provided proteins from the set of scored peptides from percolator. It
-* uses number of additional parameters to setup the calculations.
+* uses number of additional parameters to setup the calculations. A protein
+* is scored by its best peptide.
 *
 * Here are some usefull abbreviations:
 * FDR - False Discovery Rate
@@ -54,7 +44,7 @@ enum ProteinInferenceMethod {
 class PickedProteinInterface : public ProteinProbEstimator {
 
  public:
-  PickedProteinInterface(const std::string& fastaDatabase, double pvalueCutoff,
+  PickedProteinInterface(const std::string& fastaDatabase,
     bool reportFragmentProteins, bool reportDuplicateProteins, 
     bool trivialGrouping, double absenceRatio, 
     bool outputEmpirQval, std::string& decoyPattern,
@@ -65,7 +55,6 @@ class PickedProteinInterface : public ProteinProbEstimator {
   void run() {}
   void computeProbabilities(const std::string& fname = "");
   
-  std::ostream& printParametersXML(std::ostream &os);
   string printCopyright();
 
  private:
@@ -80,10 +69,8 @@ class PickedProteinInterface : public ProteinProbEstimator {
   void estimatePEPs();
   
   /** PICKED_PROTEIN PARAMETERS **/
-  ProteinInferenceMethod protInferenceMethod_;
   std::string fastaProteinFN_;
   bool reportFragmentProteins_, reportDuplicateProteins_;
-  double maxPeptidePval_;
   
 };
 

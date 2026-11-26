@@ -7,8 +7,11 @@ import sys
 import tempfile
 import gzip
 import shutil
+import csv
+import math
 
-pathToBinaries = "@pathToBinaries@"
+# ctest sets SYSTEM_TEST_BIN_DIR to the binaries of the build tree
+pathToBinaries = os.environ.get("SYSTEM_TEST_BIN_DIR", "@pathToBinaries@")
 pathToData = "@pathToData@"
 pathToOutputData = "@pathToOutputData@"
 xmlSupport = @xmlSupport@
@@ -41,24 +44,6 @@ def canPercRunThisXml(testName,flags,testFile):
 
 def canPercRunThisTab(testName,flags,testFile):
   return canPercRunThis(testName,flags,testFile,"",False)
-
-def canPercRunWithInputArgs(testName, flags, inputArgs, checkValidXml=True):
-  success = True
-  outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
-  xmlOutput = doubleQuote(outputPath + ".pout.xml")
-  txtOutput = doubleQuote(outputPath + ".txt")
-  percExe = doubleQuote(os.path.join(pathToBinaries, "percolator"))
-  cmd = ' '.join([percExe, inputArgs, '-S 2 -X', xmlOutput, flags, '>', txtOutput,'2>&1'])
-  processFile = os.popen(cmd)
-  exitStatus = processFile.close()
-  if exitStatus is not None:
-    print(cmd)
-    print("...TEST FAILED: percolator ("+testName+") terminated with " + os.strerror(exitStatus) + " exit status")
-    print("check "+ txtOutput +" for details")
-    success = False
-  if checkValidXml:
-    success = success and validate(testName,xmlOutput)
-  return success
 
 def canPercRunWithInputArgsNoXml(testName, flags, inputArgs):
   success = True
@@ -96,14 +81,77 @@ def filesExist(paths):
       return False
   return True
 
+def removeDirIfExists(path):
+  if os.path.isdir(path):
+    shutil.rmtree(path)
+
+def readTsvRows(path):
+  with open(path, "r", newline="") as resultFile:
+    return list(csv.DictReader(resultFile, delimiter="\t"))
+
+def pinIds(path):
+  ids = set()
+  with open(path, "r") as pinFile:
+    next(pinFile, None)
+    for line in pinFile:
+      fields = line.rstrip("\n").split("\t")
+      if fields and fields[0].lower() != "defaultdirection":
+        ids.add(fields[0])
+  return ids
+
+def perInputPsmOutputsAreUsable(paths, expectedIds):
+  valid = True
+  sawNonzeroPep = False
+  for path in paths:
+    if not os.path.isfile(path):
+      print("...TEST FAILED: expected output missing: " + path)
+      return False
+    rows = readTsvRows(path)
+    if not rows:
+      print("...TEST FAILED: per-input PSM output has no rows: " + path)
+      valid = False
+      continue
+    for row in rows:
+      psmId = row.get("PSMId", "")
+      if not psmId or psmId not in expectedIds or "::PERC_SRC::" in psmId:
+        print("...TEST FAILED: invalid or source-tagged PSM ID: " + psmId)
+        valid = False
+      try:
+        pep = float(row["posterior_error_prob"])
+        qValue = float(row["q-value"])
+      except (KeyError, TypeError, ValueError):
+        print("...TEST FAILED: missing or invalid PEP/q-value in " + path)
+        valid = False
+        continue
+      if not math.isfinite(pep) or not math.isfinite(qValue) or not 0.0 <= pep <= 1.0 or not 0.0 <= qValue <= 1.0:
+        print("...TEST FAILED: out-of-range PEP/q-value in " + path)
+        valid = False
+      if pep > 0.0:
+        sawNonzeroPep = True
+  if not sawNonzeroPep:
+    print("...TEST FAILED: all per-input PSM PEPs are zero")
+    valid = False
+  return valid
+
+def filesMatch(paths):
+  if len(paths) < 2:
+    return True
+  with open(paths[0], "rb") as firstFile:
+    firstContents = firstFile.read()
+  for path in paths[1:]:
+    with open(path, "rb") as otherFile:
+      if otherFile.read() != firstContents:
+        print("...TEST FAILED: outputs differ for identical inputs: " + path)
+        return False
+  return True
+
 def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
   success = True
   outputPath = os.path.join(pathToOutputData,"PERCOLATOR_"+testName)
-  xmlOutput = doubleQuote(outputPath + ".pout.xml")
   txtOutput = doubleQuote(outputPath + ".txt")
   readPath = doubleQuote(os.path.join(pathToData, testFile))
   percExe = doubleQuote(os.path.join(pathToBinaries, "percolator"))
-  cmd = ' '.join([percExe, testFileFlag, readPath, '-S 2 -X', xmlOutput, flags, '>', txtOutput,'2>&1'])
+  cmd = ' '.join([percExe, testFileFlag, readPath, '-S 2', flags, '>', txtOutput,'2>&1'])
   processFile = os.popen(cmd)
   exitStatus = processFile.close()
   if exitStatus is not None:
@@ -111,8 +159,6 @@ def canPercRunThis(testName,flags,testFile,testFileFlag="",checkValidXml=True):
     print("...TEST FAILED: percolator ("+testName+") terminated with " + os.strerror(exitStatus) + " exit status")
     print("check "+ txtOutput +" for details")
     success = False
-  if checkValidXml:
-    success = success and validate(testName,xmlOutput)
   return success
 
 def createMiniPin(sourcePath, targetPath, maxLines=250):
@@ -138,25 +184,6 @@ def doubleQuote(path):
 
 
 T = Tester()
-
-if xmlSupport:
-  print("- PERCOLATOR PIN XML FORMAT")
-
-  print("(*) running percolator to calculate psm probabilities...")
-  T.doTest(canPercRunThisXml("psms","-y -U","percolator/pin/pin.xml"))
-
-  print("(*) running percolator to calculate peptide probabilities...")
-  T.doTest(canPercRunThisXml("peptides","-y","percolator/pin/pin.xml"))
-
-  print("(*) running percolator to calculate protein probabilities with picked-protein...")
-  T.doTest(canPercRunThisXml("proteins","-f auto -P decoy_","percolator/pin/pin.xml"))
-
-  print("(*) running percolator with subset training option...")
-  T.doTest(canPercRunThisXml("subset_training","-y -N 1000 -U","percolator/pin/pin.xml"))
-  
-  print("(*) running percolator to generate tab-delimited input...")
-  tabData=os.path.join(pathToOutputData, "percolatorTab ")
-  T.doTest(canPercRunThis("tab_generate","-y -U -J " + tabData,"percolator/pin/pin.xml","-k",False))
 
 # running percolator with option to process tab-delimited input
 print("- PERCOLATOR TAB FORMAT")
@@ -200,7 +227,7 @@ gzipFile(pinA, gzA)
 gzipFile(pinB, gzB)
 
 wildcardArg = doubleQuote(os.path.join(globInputRoot, "*", "*.pin.gz"))
-T.doTest(canPercRunWithInputArgs("tab_glob_gz", "-y -U", wildcardArg, False))
+T.doTest(canPercRunWithInputArgsNoXml("tab_glob_gz", "-y -U", wildcardArg))
 
 print("(*) running percolator with --input-file-list containing pin.gz paths and patterns...")
 inputListPath = os.path.join(pathToOutputData, "pin_inputs.txt")
@@ -212,10 +239,12 @@ with open(inputListPath, "w") as listFile:
   listFile.write(gzA + "\n")
 
 fileListArgs = "--input-file-list " + doubleQuote(inputListPath)
-T.doTest(canPercRunWithInputArgs("tab_file_list_gz", "-y -U", fileListArgs, False))
+T.doTest(canPercRunWithInputArgsNoXml(
+  "tab_file_list_gz", "-y -U", fileListArgs))
 
 print("(*) running percolator with --output-each-folder in combined training mode...")
 outputEachCombined = os.path.join(pathToOutputData, "output_each_combined")
+removeDirIfExists(outputEachCombined)
 flagsOutputEachCombined = (
   "-y --output-each-folder " + doubleQuote(outputEachCombined) +
   " --results-peptides ignored --results-psms ignored")
@@ -230,6 +259,10 @@ combinedOk = canPercRunWithInputArgsNoXml("tab_output_each_combined",
                                           flagsOutputEachCombined,
                                           inputArgsOutputEach)
 combinedOk = combinedOk and filesExist(expectedCombined)
+expectedIds = pinIds(pinA)
+combinedPsmPaths = [expectedCombined[1], expectedCombined[3]]
+combinedOk = combinedOk and perInputPsmOutputsAreUsable(
+  combinedPsmPaths, expectedIds)
 T.doTest(combinedOk)
 
 print("(*) running percolator with --output-each-folder in combined mode and shared weights...")
@@ -271,6 +304,7 @@ T.doTest(canPercFailWithInputArgsNoXml(
 
 print("(*) running percolator with --output-each-folder and --train-each...")
 outputEachTrainEach = os.path.join(pathToOutputData, "output_each_train_each")
+removeDirIfExists(outputEachTrainEach)
 flagsOutputEachTrainEach = (
   "-y --output-each-folder " + doubleQuote(outputEachTrainEach) +
   " --train-each --results-peptides ignored --results-psms ignored -w weights.txt")
@@ -286,7 +320,59 @@ trainEachOk = canPercRunWithInputArgsNoXml("tab_output_each_train_each",
                                            flagsOutputEachTrainEach,
                                            inputArgsOutputEach)
 trainEachOk = trainEachOk and filesExist(expectedTrainEach)
+for suffix in ["target.psms.tsv", "target.peptides.tsv", "weights.txt"]:
+  trainEachOk = trainEachOk and filesMatch([
+    os.path.join(outputEachTrainEach, "input_a." + suffix),
+    os.path.join(outputEachTrainEach, "input_b." + suffix),
+  ])
 T.doTest(trainEachOk)
+
+print("(*) running combined per-input PSM output with -N subset training...")
+outputEachSubset = os.path.join(pathToOutputData, "output_each_subset")
+removeDirIfExists(outputEachSubset)
+flagsOutputEachSubset = (
+  "-y -U -N 100 --output-each-folder " + doubleQuote(outputEachSubset) +
+  " --results-psms ignored --decoy-results-psms ignored")
+expectedSubset = [
+  os.path.join(outputEachSubset, "input_a.target.psms.tsv"),
+  os.path.join(outputEachSubset, "input_a.decoy.psms.tsv"),
+  os.path.join(outputEachSubset, "input_b.target.psms.tsv"),
+  os.path.join(outputEachSubset, "input_b.decoy.psms.tsv"),
+]
+subsetOk = canPercRunWithInputArgsNoXml(
+  "tab_output_each_subset", flagsOutputEachSubset, inputArgsOutputEach)
+subsetOk = subsetOk and filesExist(expectedSubset)
+subsetOk = subsetOk and perInputPsmOutputsAreUsable(
+  [expectedSubset[0], expectedSubset[2]], expectedIds)
+subsetOk = subsetOk and perInputPsmOutputsAreUsable(
+  [expectedSubset[1], expectedSubset[3]], expectedIds)
+T.doTest(subsetOk)
+
+print("(*) checking that per-input output does not overwrite an input file...")
+collisionDir = os.path.join(pathToOutputData, "output_each_input_collision")
+removeDirIfExists(collisionDir)
+ensureDir(collisionDir)
+collisionInputA = os.path.join(collisionDir, "a.pin")
+collisionInputB = os.path.join(collisionDir, "a.target.psms.tsv")
+createMiniPin(sourceTab, collisionInputA)
+createMiniPin(sourceTab, collisionInputB)
+with open(collisionInputB, "rb") as collisionFile:
+  collisionContents = collisionFile.read()
+collisionArgs = doubleQuote(collisionInputA) + " " + doubleQuote(collisionInputB)
+collisionFlags = (
+  "-y --output-each-folder " + doubleQuote(collisionDir) +
+  " --results-psms ignored")
+collisionOk = canPercFailWithInputArgsNoXml(
+  "tab_output_each_input_collision", collisionFlags, collisionArgs)
+collisionLog = os.path.join(
+  pathToOutputData, "PERCOLATOR_tab_output_each_input_collision.txt")
+with open(collisionLog, "r") as logFile:
+  collisionLogText = logFile.read()
+collisionOk = collisionOk and "which is the input file" in collisionLogText
+collisionOk = collisionOk and collisionInputB in collisionLogText
+with open(collisionInputB, "rb") as collisionFile:
+  collisionOk = collisionOk and collisionFile.read() == collisionContents
+T.doTest(collisionOk)
 
 # if no errors were encountered, succeed
 if T.failures == 0:

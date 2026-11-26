@@ -1,38 +1,33 @@
-#!/bin/bash
-
-# 1. Define Source and Build directories
-# The folder containing the top-level CMakeLists.txt file.
-SRC_DIR="/data/p/percolator/percolator"
-
-# The folder where the build files and executables will be created.
-BUILD_DIR="${SRC_DIR}/bin"
-CUSTOM_BOOST_DIR="/data/p/sys/boost/boost_1_88_0_install"
-# 2. Create the build directory if it does not exist
-# The -p flag ensures no error is thrown if the directory already exists.
-echo "Creating build directory at: ${BUILD_DIR}"
-mkdir -p "${BUILD_DIR}"
-
-# 3. Navigate into the build directory
-cd "${BUILD_DIR}"
-
-# 4. Configure the project with CMake
-# This command generates the Makefiles needed for compilation.
-# We are pointing CMake back to the source directory ("..").
-# - CMAKE_BUILD_TYPE=Release : Compiles with high optimization levels.
-# - XML_SUPPORT=ON           : Builds Percolator with XML support.
-echo "Configuring project with CMake..."
-cmake -DCMAKE_BUILD_TYPE=Release \
-      -DXML_SUPPORT=ON \
-      -DBOOST_ROOT="${CUSTOM_BOOST_DIR}" \
-      -DBoost_USE_STATIC_LIBS=ON \
-      -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
-      \
-      "${SRC_DIR}"
-
-# 5. Compile the code with Make
-# The -j 4 flag tells make to use 4 CPU cores to speed up the build.
-# You can adjust this number based on your system's core count.
-echo "Compiling with Make..."
-make -j 40
-
-echo "Build finished. Executables are located in ${BUILD_DIR}/src"
+#!/usr/bin/env bash
+# Fully static Linux build using the locally installed GCC 14 and Conda sysroot.
+set -e
+if [[ -f /opt/rh/gcc-toolset-14/enable ]]; then
+  source /opt/rh/gcc-toolset-14/enable
+fi
+set -u
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${BUILD_DIR:-${SRC_DIR}/build/static-gcc14}"
+CONDA_ROOT="${CONDA_PREFIX:-/data/p/anaconda3}"
+STATIC_SYSROOT="${STATIC_SYSROOT:-${CONDA_ROOT}/x86_64-conda-linux-gnu/sysroot}"
+STATIC_ZLIB_ROOT="${STATIC_ZLIB_ROOT:-/data/p/hdf5/zlib-1.2.11_build_gcc13_glibc217}"
+INSTALL_PREFIX="${INSTALL_PREFIX:-${SRC_DIR}/bin-static}"
+JOBS="${JOBS:-12}"
+extra_args=()
+if [[ -d "${SRC_DIR}/build-noxml/_deps/googletest-src" ]]; then
+  extra_args+=("-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST=${SRC_DIR}/build-noxml/_deps/googletest-src")
+fi
+cmake -S "${SRC_DIR}" -B "${BUILD_DIR}" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER="$(command -v g++)" \
+  -DCMAKE_SYSROOT="${STATIC_SYSROOT}" \
+  -DCMAKE_EXE_LINKER_FLAGS=-static \
+  -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+  -DSTATIC=ON -DUSE_SYSTEM_GTEST=OFF \
+  -DZLIB_LIBRARY="${STATIC_ZLIB_ROOT}/lib/libz.a" \
+  -DZLIB_INCLUDE_DIR="${STATIC_ZLIB_ROOT}/include" \
+  "${extra_args[@]}"
+cmake --build "${BUILD_DIR}" -j "${JOBS}"
+ctest --test-dir "${BUILD_DIR}" --output-on-failure -j 2
+cmake --install "${BUILD_DIR}"
+cmake --build "${BUILD_DIR}" --target test-install
+file "${INSTALL_PREFIX}/bin/percolator" "${INSTALL_PREFIX}/bin/qvality"

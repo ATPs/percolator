@@ -15,34 +15,45 @@
 
  *******************************************************************************/
 #include <cstdlib>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include "Caller.h"
 #include "Globals.h"
 using namespace std;
 
 
 int main(int argc, char** argv) {
-  
-  Caller* pCaller = new Caller();
+#ifdef __GLIBC__
+  // glibc serves a block above its mmap threshold from a mapping of its own
+  // and returns it to the system when it is freed. The threshold starts at
+  // 128 KiB but rises to the size of every such block that is freed, up to
+  // 32 MiB, and smaller blocks then stay in the heap after they are freed:
+  // the training data of the first stages remained resident during the
+  // later ones. A fixed threshold switches the adjustment off. Set here and
+  // not in the library, whose callers choose their own allocator settings.
+  mallopt(M_MMAP_THRESHOLD, 1024 * 1024);
+#endif
   int retVal = EXIT_FAILURE; 
-  
-  try
   {
-    if (pCaller->parseOptions(argc, argv)) {
-    	if (pCaller->run()) retVal = EXIT_SUCCESS;
-	  }
+    Caller caller;
+    try
+    {
+      if (caller.parseOptions(argc, argv)) {
+        if (caller.run()) retVal = EXIT_SUCCESS;
+      }
+    }
+    catch (const std::exception& e) 
+    {
+      std::cerr << "Exception caught: " << e.what() << endl;
+      retVal = EXIT_FAILURE;
+    }
+    catch(...)
+    {
+      std::cerr << "Unknown exception, contact the developer.." << std::endl;
+      retVal = EXIT_FAILURE;
+    }
   }
-  catch (const std::exception& e) 
-  {
-    std::cerr << "Exception caught: " << e.what() << endl;
-    retVal = EXIT_FAILURE;
-  }
-  catch(...)
-  {
-    std::cerr << "Unknown exception, contact the developer.." << std::endl;
-    retVal = EXIT_FAILURE;
-  }
-  
-  delete pCaller;
   Globals::clean();
   return retVal;
 }

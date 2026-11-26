@@ -17,42 +17,61 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <fstream>
+#include <random>
+#include <stdexcept>
 #include <string>
-
-#include <boost/filesystem.hpp>
+#include <system_error>
 
 #include "TmpDir.h"
 
 namespace {
 
+namespace fs = std::filesystem;
+
+fs::path makeUniqueTempDir(const std::string& prefix) {
+  static std::mt19937_64 generator(std::random_device{}());
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    fs::path path = fs::temp_directory_path() /
+                    (prefix + std::to_string(generator()));
+    std::error_code error;
+    if (fs::create_directory(path, error)) {
+      return path;
+    }
+  }
+  throw std::runtime_error("Could not create a unique temporary directory");
+}
+
 class ScopedTempDir {
  public:
-  ScopedTempDir() {
-    path_ = boost::filesystem::temp_directory_path() /
-            boost::filesystem::unique_path("percolator-tmpdir-%%%%-%%%%");
-    boost::filesystem::create_directories(path_);
+  ScopedTempDir() : path_(makeUniqueTempDir("percolator-tmpdir-")) {}
+
+  ~ScopedTempDir() {
+    std::error_code error;
+    fs::remove_all(path_, error);
   }
 
-  ~ScopedTempDir() { boost::filesystem::remove_all(path_); }
-
-  boost::filesystem::path path() const { return path_; }
+  fs::path path() const { return path_; }
 
  private:
-  boost::filesystem::path path_;
+  fs::path path_;
 };
 
 class ScopedCurrentPath {
  public:
-  explicit ScopedCurrentPath(const boost::filesystem::path& newPath)
-      : originalPath_(boost::filesystem::current_path()) {
-    boost::filesystem::current_path(newPath);
+  explicit ScopedCurrentPath(const fs::path& newPath)
+      : originalPath_(fs::current_path()) {
+    fs::current_path(newPath);
   }
 
-  ~ScopedCurrentPath() { boost::filesystem::current_path(originalPath_); }
+  ~ScopedCurrentPath() {
+    std::error_code error;
+    fs::current_path(originalPath_, error);
+  }
 
  private:
-  boost::filesystem::path originalPath_;
+  fs::path originalPath_;
 };
 
 }  // namespace
@@ -69,21 +88,21 @@ TEST(TmpDirTest, CreatesUnderCurrentDirectoryAndCleansUp) {
   ASSERT_FALSE(tempFilePath.empty());
   ASSERT_FALSE(tempDirPath.empty());
 
-  boost::filesystem::path createdDir(tempDirPath);
-  boost::filesystem::path expectedRoot = boost::filesystem::current_path();
+  fs::path createdDir(tempDirPath);
+  fs::path expectedRoot = std::filesystem::current_path();
   EXPECT_EQ(expectedRoot, createdDir.parent_path());
   EXPECT_EQ("converters-tmp.tcb",
-            boost::filesystem::path(tempFilePath).filename().string());
-  EXPECT_TRUE(boost::filesystem::is_directory(createdDir));
+            fs::path(tempFilePath).filename().string());
+  EXPECT_TRUE(std::filesystem::is_directory(createdDir));
 
   std::ofstream out(tempFilePath.c_str());
   ASSERT_TRUE(out.is_open());
   out << "tmp";
   out.close();
-  EXPECT_TRUE(boost::filesystem::exists(tempFilePath));
+  EXPECT_TRUE(std::filesystem::exists(tempFilePath));
 
   TmpDir::cleanupAll();
-  EXPECT_FALSE(boost::filesystem::exists(createdDir));
+  EXPECT_FALSE(std::filesystem::exists(createdDir));
 }
 
 TEST(TmpDirTest, UsesConfiguredTempFolderWhenSet) {
@@ -100,13 +119,26 @@ TEST(TmpDirTest, UsesConfiguredTempFolderWhenSet) {
   ASSERT_FALSE(tempFilePath.empty());
   ASSERT_FALSE(tempDirPath.empty());
 
-  boost::filesystem::path createdDir(tempDirPath);
+  fs::path createdDir(tempDirPath);
   EXPECT_EQ(configuredDir.path(), createdDir.parent_path());
   EXPECT_EQ("converters-tmp.tcb",
-            boost::filesystem::path(tempFilePath).filename().string());
-  EXPECT_TRUE(boost::filesystem::is_directory(createdDir));
+            fs::path(tempFilePath).filename().string());
+  EXPECT_TRUE(std::filesystem::is_directory(createdDir));
 
   TmpDir::cleanupAll();
-  EXPECT_FALSE(boost::filesystem::exists(createdDir));
+  EXPECT_FALSE(std::filesystem::exists(createdDir));
   TmpDir::setTempRoot("");
+}
+
+TEST(TmpDirTest, ObjectLifetimeRemovesTemporaryDirectory) {
+  fs::path createdDir;
+  {
+    TmpDir tempDir;
+    createdDir = tempDir.getPath();
+    ASSERT_TRUE(fs::is_directory(createdDir));
+    std::ofstream out(createdDir / "contents.txt");
+    ASSERT_TRUE(out.is_open());
+    out << "temporary";
+  }
+  EXPECT_FALSE(fs::exists(createdDir));
 }

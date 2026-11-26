@@ -1,7 +1,9 @@
+# Sets a cache variable unless the user gave it a value. project() defines
+# some variables (e.g. CMAKE_BUILD_TYPE) as empty, so empty counts as unset.
 macro(my_set variable default options)
-  if(NOT DEFINED ${variable})
+  if(NOT DEFINED ${variable} OR "${${variable}}" STREQUAL "")
     set(${variable} ${default} CACHE STRING ${options} FORCE)
-  endif(NOT DEFINED ${variable})
+  endif()
 endmacro(my_set)
 
 # STORE NEWLY SET VARIABLES IN *.h.cmake FILES
@@ -33,28 +35,39 @@ macro(load_config_files location)
   endforeach()
 endmacro()
 
-# useful macro
-macro(my_find_program progname)
-  find_program(${progname}_EXECUTABLE ${progname})
-  if(NOT ${progname}_EXECUTABLE)
-    message(FATAL_ERROR  "${progname} not found" )
-  endif(NOT ${progname}_EXECUTABLE)
-endmacro(my_find_program)
-
-function(get_arch TARGET_ARCH)
-  # Detect machine architecture, on UNIX:
-  if(UNIX AND NOT APPLE AND NOT DEFINED ${TARGET_ARCH})
-	execute_process(COMMAND dpkg --print-architecture
-			 OUTPUT_VARIABLE TARGET_ARCH
-			 OUTPUT_STRIP_TRAILING_WHITESPACE)
-	message(STATUS "Architecture: ${TARGET_ARCH}")
-  endif(UNIX AND NOT APPLE AND NOT DEFINED ${TARGET_ARCH})
-  if(APPLE AND NOT DEFINED ${TARGET_ARCH})
-	execute_process(COMMAND uname -m
-			 OUTPUT_VARIABLE TARGET_ARCH
-			 OUTPUT_STRIP_TRAILING_WHITESPACE)
-	message(STATUS "Architecture: ${TARGET_ARCH}")
-  endif(APPLE AND NOT DEFINED ${TARGET_ARCH})
+# Sets TARGET_ARCH, the architecture in the package names, in the calling
+# scope unless it was given (-DTARGET_ARCH=...): on Linux the Debian
+# architecture (e.g. amd64) where dpkg is available, otherwise the processor
+# (e.g. x86_64); on macOS the architecture in CMAKE_OSX_ARCHITECTURES, or
+# "universal" for several, or the processor of the build machine.
+function(get_arch)
+  if(NOT "${TARGET_ARCH}" STREQUAL "")
+    return()
+  endif()
+  set(arch "")
+  if(APPLE)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES num_archs)
+    if(num_archs GREATER 1)
+      set(arch "universal")
+    elseif(num_archs EQUAL 1)
+      set(arch "${CMAKE_OSX_ARCHITECTURES}")
+    endif()
+  elseif(UNIX)
+    find_program(DPKG_EXECUTABLE dpkg)
+    mark_as_advanced(DPKG_EXECUTABLE)
+    if(DPKG_EXECUTABLE)
+      execute_process(COMMAND ${DPKG_EXECUTABLE} --print-architecture
+                      OUTPUT_VARIABLE arch
+                      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endif()
+  endif()
+  if(UNIX AND arch STREQUAL "")
+    execute_process(COMMAND uname -m
+                    OUTPUT_VARIABLE arch
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  endif()
+  message(STATUS "Architecture: ${arch}")
+  set(TARGET_ARCH "${arch}" PARENT_SCOPE)
 endfunction()
 
 ###############################################################################
@@ -69,9 +82,9 @@ set(CMAKE_MODULE_PATH ${PERCOLATOR_SOURCE_DIR}/cmake)
 
 
 # VERSION AND NAMESPACES
-set(CPACK_PACKAGE_VERSION_MAJOR "3")
-set(CPACK_PACKAGE_VERSION_MINOR "08")
-set(CPACK_PACKAGE_VERSION_PATCH "01")
+set(CPACK_PACKAGE_VERSION_MAJOR "4")
+set(CPACK_PACKAGE_VERSION_MINOR "00")
+set(CPACK_PACKAGE_VERSION_PATCH "1")
 set(PIN_VERSION_MAJOR "1")
 set(PIN_VERSION_MINOR "3")
 set(POUT_VERSION_MAJOR "1")
@@ -87,102 +100,46 @@ INCLUDE(VersionGen)
 NIGHTLY_VERSION_GEN(CPACK_PACKAGE_VERSION_PATCH ${CPACK_PACKAGE_VERSION_MAJOR} ${CPACK_PACKAGE_VERSION_MINOR} ${CPACK_PACKAGE_VERSION_PATCH})
 #MESSAGE(STATUS "NIGHTLY_VERSION ${CPACK_PACKAGE_VERSION_PATCH}")
 
-IF(MSVC)
-  set(XML_REL_PATH "share/xml\\\\percolator/")
-ELSE(MSVC)
-  set(XML_REL_PATH "share/xml/percolator/")
-ENDIF(MSVC)
 
 IF(MINGW OR WIN32)
     set(CMAKE_FIND_LIBRARY_SUFFIXES ".lib" ".dll" ${CMAKE_FIND_LIBRARY_SUFFIXES})
     set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} ${CMAKE_SOURCE_DIR}/lib/include)
     set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} ${CMAKE_SOURCE_DIR}/lib/lib)
-    set(WRITABLE_DIR ${XML_REL_PATH})
     add_definitions(-D_WIN32)
 ELSE(MINGW OR WIN32)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-    set(CMAKE_INCLUDE_PATH /usr/include ${CMAKE_INCLUDE_PATH})
-    set(CMAKE_LIBRARY_PATH /usr/lib /usr/lib64 ${CMAKE_LIBRARY_PATH})
-    set(WRITABLE_DIR ${CMAKE_INSTALL_PREFIX}/${XML_REL_PATH})
+    list(APPEND CMAKE_INCLUDE_PATH /usr/include)
+    list(APPEND CMAKE_LIBRARY_PATH /usr/lib /usr/lib64)
 ENDIF(MINGW OR WIN32)
 
-set(PIN_SCHEMA_LOCATION "xml-pin-${PIN_VERSION_MAJOR}-${PIN_VERSION_MINOR}/")
-set(POUT_SCHEMA_LOCATION "xml-pout-${POUT_VERSION_MAJOR}-${POUT_VERSION_MINOR}/")
-
-IF(MINGW)
-  IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    SET(MINGW64 1)
-    SET(MINGW_PATH /usr/x86_64-w64-mingw32/sys-root/mingw/)
-    SET(MINGW_PACK_NAME win64)
-  ELSE()
-    SET(MINGW32 1)
-    SET(MINGW_PATH /usr/i686-w64-mingw32/sys-root/mingw/)
-    SET(MINGW_PACK_NAME win32)
-  ENDIF()
-ENDIF(MINGW)
-
 set(PACKAGE_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
-set(percolator-in-namespace http://per-colator.com/percolator_in/${PIN_VERSION_MAJOR}${PIN_VERSION_MINOR})
-set(percolator-out-namespace http://per-colator.com/percolator_out/${POUT_VERSION_MAJOR}${POUT_VERSION_MINOR})
-set(mzIdentML-namespace "http://psidev.info/psi/pi/mzIdentML/${MZIDENTML_VERSION_MAJOR}.${MZIDENTML_VERSION_MINOR}")
-set(gaxml_tandem-namespace "http://www.bioml.com/gaml/")
-set(tandem-namespace "http://www.thegpm.org/TANDEM/${TANDEM_VERSION}")
 
 #STATIC/DYNAMIC LIBRARY INCLUSION
-if(APPLE)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-endif()
+# Static libraries are preferred by default on Windows only. The macOS
+# installer (admin/builders/osx64_build.sh), the portable Linux build and the
+# wheels (pyproject.toml) ask for them with -DSTATIC=ON; package managers
+# such as conda need dynamic linking.
 if(MINGW OR WIN32 OR APPLE)
   OPTION(BUILD_SHARED_LIBS "build static binaries." OFF)
+endif()
+if(MINGW OR WIN32)
   OPTION(STATIC "build static binaries. This is mainly intended for the win32-package and the MACOSX-bundle." ON )
-else(MINGW OR WIN32 OR APPLE)
+else()
   OPTION(STATIC "build static binaries. This is mainly intended for the win32-package and the MACOSX-bundle." OFF )
 endif()
-
-# Link Boost static and single threaded
-set(Boost_USE_STATIC_LIBS   ON)
-set(Boost_USE_MULTITHREADED OFF)
-
-set(BOOST_MIN_VERSION "1.70.0")
-
+if(UNIX AND STATIC)
+  list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
+endif()
 
 ###############################################################################
 # SET COMPILER OPTIONS
 ###############################################################################
 
-set (CMAKE_CXX_STANDARD 14)
+set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED YES)
 set (CMAKE_CXX_EXTENSIONS OFF)
 
-IF(APPLE)
-  add_definitions(-Dxdr_uint16_t=xdr_u_int16_t -Dxdr_uint32_t=xdr_u_int32_t -Dxdr_uint64_t=xdr_u_int64_t)
-  set(Boost_USE_MULTITHREADED ON) # macports can currently not install single threaded boost libraries
-ENDIF(APPLE)
-
 if(UNIX OR APPLE OR MINGW)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -D_GLIBCXX_PARALLEL")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-deprecated-declarations -D_GLIBCXX_PARALLEL")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
-  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -DNDEBUG")
   set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
-  set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g")
 endif()
 
-if(PROFILING AND UNIX)
-  set(PROFILING_COMMON_FLAGS -Wno-unused-result -Wno-overflow -Wall -g -pg -fprofile-arcs -ftest-coverage)
-endif()
-
-if(MSVC)
-  add_definitions (/MP /D _CRT_SECURE_NO_WARNINGS /D _CRT_NONSTDC_NO_DEPRECATE)
-  # CMake automatically configures VS to use multi threading,
-  # if boost would use single threading, the auto-linking process of boost would fail.
-  set(Boost_USE_MULTITHREADED ON)
-endif(MSVC)
-
-if((NOT APPLE) OR (NOT CRUX AND APPLE AND ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} VERSION_GREATER 3.8))
-  find_package(OpenMP)
-  if (OPENMP_FOUND)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-  endif(OPENMP_FOUND)
-endif()

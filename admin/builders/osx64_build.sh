@@ -8,7 +8,7 @@
 
 
 # managing input arguments
-while getopts “s:b:r:t:” OPTION; do
+while getopts "s:b:r:t:" OPTION; do
   case $OPTION in
     s) src_dir=${OPTARG};;
     t) branch=${OPTARG};;
@@ -32,22 +32,18 @@ if [[ -d /opt/local/var/macports ]]
   then
     echo "[ Package manager ] : MacPorts "
     package_manager="sudo port"
-    boost_install_options="boost -no_static"
-    other_packages="cmake tokyocabinet bzip2 libiconv zlib"
+    other_packages="cmake libomp"
 elif [[ -f ${HOME}/bin/brew ]]
   then
     echo "[ Package manager ] : Homebrew "
     package_manager=$HOME/bin/brew
-    boost_install_options="boost"
-    other_packages="cmake tokyo-cabinet lbzip2 pbzip2 lzlib llvm libomp"
-elif [[ -f /usr/local/bin/brew || -f /opt/homebrew/bin/brew ]]  
+    other_packages="libomp"
+elif [[ -f /usr/local/bin/brew || -f /opt/homebrew/bin/brew ]]
   then
     echo "[ Package manager ] : Homebrew "
     package_manager="brew"
     ${package_manager} update || true # brew.rb raises an error on the vagrant box, just ignore it
-    boost_install_options="boost"
-    other_packages="cmake tokyo-cabinet lbzip2 pbzip2 lzlib llvm libomp"
-
+    other_packages="libomp"
 else
     package_manager_installed=false
 fi
@@ -59,6 +55,12 @@ if [ "$package_manager_installed" == false ]
   echo "  Homebrew: http://brew.sh/ "
   echo "  MacPorts: http://www.macports.org/install.php"
   exit 1
+fi
+
+if command -v cmake >/dev/null 2>&1; then
+  echo "CMake found, stay with installation"
+else
+  other_packages="$other_packages cmake"
 fi
 
 if [[ -z ${build_dir} ]]; then
@@ -84,24 +86,23 @@ fi
 echo "The Builder $0 is building the Percolator packages with src=${src_dir} an\
 d build=${build_dir} for user" `whoami`
 $package_manager install $other_packages
-$package_manager install $boost_install_options
+
+if [[ -f /usr/local/bin/brew || -f /opt/homebrew/bin/brew ]]
+  then
+  export HOMEBREW_PREFIX="$(brew --prefix)"
+  export OMP_PREFIX="$HOMEBREW_PREFIX/opt/libomp"
+
+  # Make omp.h and libomp visible
+  export CXXFLAGS="$CXXFLAGS -I$OMP_PREFIX/include"
+  export LDFLAGS="$LDFLAGS -L$OMP_PREFIX/lib"
+fi
+
 cd ${src_dir}
 
 # read all urls and file names from a centralized kb file
 source ./percolator/admin/builders/_urls_and_file_names_.sh
 mkdir -p ${build_dir}
 cd ${build_dir}
-
-$package_manager install xerces-c xsd
-export CC=/opt/homebrew/opt/llvm/bin/clang
-export CXX=/opt/homebrew/opt/llvm/bin/clang++
-export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-export SYSROOT_FLAGS="--sysroot=$SDKROOT -isystem$SDKROOT/usr/include -isystem$SDKROOT/System/Library/Frameworks"
-export HOMEBREW_LLVM_INCLUDE="/opt/homebrew/opt/llvm/include/c++/v1"
-export CXXFLAGS="-isystem $HOMEBREW_LLVM_INCLUDE $SYSROOT_FLAGS -I/opt/homebrew/opt/tokyo-cabinet/include"
-export LDFLAGS="-L/opt/homebrew/opt/llvm/lib/c++ -L/opt/homebrew/opt/tokyo-cabinet/lib -stdlib=libc++ -framework CoreFoundation -framework CoreServices -lcurl"
-prefix_path="/opt/homebrew/opt/xerces-c;/opt/homebrew/opt/xsd"
-
 
 function build_component() {
     local name="$1"
@@ -112,11 +113,8 @@ function build_component() {
     pushd "${build_dir}/${name}" > /dev/null
 
     cmake \
-      -DCMAKE_C_COMPILER="$CC" \
-      -DCMAKE_CXX_COMPILER="$CXX" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/usr/local \
-      -DCMAKE_PREFIX_PATH="$prefix_path" \
       -DCMAKE_CXX_FLAGS="$CXXFLAGS" \
       -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
       $options "$src"
@@ -127,10 +125,8 @@ function build_component() {
 
 mkdir -p ${release_dir}
 
-build_component "percolator-noxml" "${src_dir}/percolator" "-DXML_SUPPORT=OFF"
-build_component "percolator" "${src_dir}/percolator" "-DXML_SUPPORT=ON -DGOOGLE_TEST=1"
-build_component "converters" "${src_dir}/percolator/src/converters" "-DSERIALIZE=TokyoCabinet"
+build_component "percolator" "${src_dir}/percolator" "-DSTATIC=ON"
 
 echo "build directory was : ${build_dir}";
 
-cp -v ${build_dir}/{percolator-noxml,percolator,converters}/*.pkg ${release_dir};
+cp -v ${build_dir}/percolator/*.pkg ${release_dir};

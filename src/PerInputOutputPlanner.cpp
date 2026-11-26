@@ -2,18 +2,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
-
-#include <boost/filesystem.hpp>
 
 #include "MyException.h"
 
 namespace {
 
 const char* kSourceDelimiter = "::PERC_SRC::";
+namespace fs = std::filesystem;
 
 bool endsWith(const std::string& value, const std::string& suffix) {
   if (value.size() < suffix.size()) {
@@ -64,7 +64,7 @@ std::string sanitizePathLikeString(const std::string& input) {
 }
 
 std::string basenamePrefix(const std::string& inputPath) {
-  boost::filesystem::path p(inputPath);
+  fs::path p(inputPath);
   std::string filename = p.filename().string();
   std::string stem = removePinLikeSuffixes(filename);
   if (stem.empty()) {
@@ -74,13 +74,13 @@ std::string basenamePrefix(const std::string& inputPath) {
 }
 
 std::string flattenedRelativePrefix(const std::string& inputPath) {
-  boost::filesystem::path p(inputPath);
-  boost::filesystem::path rel = p;
-  boost::system::error_code ec;
+  fs::path p(inputPath);
+  fs::path rel = p;
+  std::error_code ec;
   if (p.is_absolute()) {
-    boost::filesystem::path cwd = boost::filesystem::current_path(ec);
+    fs::path cwd = fs::current_path(ec);
     if (!ec) {
-      boost::filesystem::path maybeRel = boost::filesystem::relative(p, cwd, ec);
+      fs::path maybeRel = fs::relative(p, cwd, ec);
       if (!ec && !maybeRel.empty()) {
         rel = maybeRel;
       } else {
@@ -113,7 +113,7 @@ std::vector<std::string> findDuplicateValues(
 }
 
 std::string joinPath(const std::string& folder, const std::string& name) {
-  return (boost::filesystem::path(folder) / name).string();
+  return (fs::path(folder) / name).string();
 }
 
 }  // namespace
@@ -185,21 +185,21 @@ bool PerInputOutputPlanner::ensureOutputFolder(const std::string& folderPath,
   createdDirectory = false;
   error.clear();
 
-  boost::system::error_code ec;
-  boost::filesystem::path outputDir(folderPath);
-  if (boost::filesystem::exists(outputDir, ec)) {
+  std::error_code ec;
+  fs::path outputDir(folderPath);
+  if (fs::exists(outputDir, ec)) {
     if (ec) {
       error = "Error: failed to inspect output folder " + folderPath + ".";
       return false;
     }
-    if (!boost::filesystem::is_directory(outputDir, ec) || ec) {
+    if (!fs::is_directory(outputDir, ec) || ec) {
       error = "Error: output path exists but is not a directory: " + folderPath;
       return false;
     }
     return true;
   }
 
-  if (!boost::filesystem::create_directories(outputDir, ec) || ec) {
+  if (!fs::create_directories(outputDir, ec) || ec) {
     error = "Error: failed to create output folder: " + folderPath;
     return false;
   }
@@ -224,12 +224,11 @@ bool PerInputOutputPlanner::reserveOutputFile(const std::string& folderPath,
     return false;
   }
 
-  boost::filesystem::path outputFile =
-      boost::filesystem::path(folderPath) / fileName;
+  fs::path outputFile = fs::path(folderPath) / fileName;
   outputPath = outputFile.string();
 
-  boost::system::error_code ec;
-  if (boost::filesystem::exists(outputFile, ec)) {
+  std::error_code ec;
+  if (fs::exists(outputFile, ec)) {
     if (ec) {
       error = "Error: failed to inspect output file: " + outputPath;
     } else {
@@ -279,7 +278,7 @@ std::string PerInputOutputPlanner::buildTemplateOutput(
   if (templatePath.empty()) {
     return "";
   }
-  std::string basename = boost::filesystem::path(templatePath).filename().string();
+  std::string basename = fs::path(templatePath).filename().string();
   if (basename.empty()) {
     return "";
   }

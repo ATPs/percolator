@@ -2,7 +2,7 @@
 # NAME AND VERSION
 ###############################################################################
 
-cmake_minimum_required (VERSION 3.5)
+cmake_minimum_required (VERSION 3.15)
 
 if(NOT CRUX AND APPLE AND ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} VERSION_GREATER 3.0)
   # Identify AppleClang's COMPILER_ID as AppleClang instead of just Clang
@@ -10,7 +10,27 @@ if(NOT CRUX AND APPLE AND ${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} VERSION_
   cmake_policy(SET CMP0025 NEW)
 endif()
 
-project(PERCOLATOR)
+# The macOS binaries run on macOS 12 and later, not only on the version of
+# the build machine. This has to be set before project(). A value given with
+# -DCMAKE_OSX_DEPLOYMENT_TARGET or in the MACOSX_DEPLOYMENT_TARGET
+# environment variable is kept.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin"
+   AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET
+   AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING
+      "Minimum macOS version of the binaries")
+endif()
+
+project(PERCOLATOR LANGUAGES CXX)
+
+# The oldest supported GCC is 9: the code uses std::filesystem, which GCC 8
+# keeps in a separate library (the link fails with undefined references).
+# GCC 11 adds std::to_chars and std::from_chars for double; with GCC 9 and 10
+# the slower number conversions are used (see src/CMakeLists.txt).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9)
+  message(FATAL_ERROR "Percolator needs GCC 9 or later "
+                      "(this is GCC ${CMAKE_CXX_COMPILER_VERSION}).")
+endif()
 set(PERCOLATOR_SOURCE_DIR ${CMAKE_SOURCE_DIR})
 include("CommonCMake.txt")
 
@@ -18,12 +38,10 @@ include("CommonCMake.txt")
 # PREPARING TO INSTALL
 ###############################################################################
 
-my_set(CMAKE_BUILD_TYPE "Debug" "Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel.")
+my_set(CMAKE_BUILD_TYPE "Release" "Choose the type of build, options are: None Debug Release RelWithDebInfo MinSizeRel.")
 my_set(CMAKE_PREFIX_PATH "../" "Default path to packages")
-option(XML_SUPPORT "Choose to support xml input (slower compilation)." OFF)
-if(XML_SUPPORT)
-  add_definitions(-DXML_SUPPORT)
-endif(XML_SUPPORT)
+
+option(NO_TESTS "Build system and integration tests" OFF)
 
 # PRINT VARIBALES TO STDOUT
 MESSAGE( STATUS )
@@ -35,12 +53,9 @@ MESSAGE( STATUS "change a configuration variable with: cmake -D<Variable>=<Value
 MESSAGE( STATUS "CMAKE_INSTALL_PREFIX = ${CMAKE_INSTALL_PREFIX}" )
 MESSAGE( STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}" )
 MESSAGE( STATUS "CMAKE_PREFIX_PATH = ${CMAKE_PREFIX_PATH}" )
-MESSAGE( STATUS "XML_SUPPORT = ${XML_SUPPORT}" )
-MESSAGE( STATUS "GOOGLE_TEST = ${GOOGLE_TEST}" )
-MESSAGE( STATUS "GOOGLE_TEST_PATH = ${GOOGLE_TEST_PATH}" )
+MESSAGE( STATUS "NO_TESTS = ${NO_TESTS}" )
 MESSAGE( STATUS "TARGET_ARCH = ${TARGET_ARCH}" )
 MESSAGE( STATUS "TOOL CHAIN FILE = ${CMAKE_TOOLCHAIN_FILE}")
-MESSAGE( STATUS "PROFILING = ${PROFILING}")
 MESSAGE( STATUS
 "-------------------------------------------------------------------------------"
 )
@@ -49,7 +64,7 @@ MESSAGE( STATUS )
 
 
 # Detect machine architecture, on UNIX:
-get_arch("${TARGET_ARCH}")
+get_arch()
 
 # STORE NEWLY SET VARIABLES IN *.h.cmake FILES
 load_config_files("${CMAKE_CURRENT_SOURCE_DIR}")
@@ -57,20 +72,33 @@ load_config_files("${CMAKE_CURRENT_SOURCE_DIR}")
 ###############################################################################
 # COMPILING
 ###############################################################################
+
+# MSVC: link the C and C++ runtime statically (/MT), so that percolator.exe
+# and qvality.exe run without the Visual C++ Redistributable. This has to be
+# set before the targets (including GoogleTest's) are defined. OpenMP's
+# vcomp140.dll has no static version; it is installed next to the
+# executables (see INSTALLING below).
+option(USE_MSVC_STATIC_RUNTIME "Link the MSVC runtime statically (/MT)" ON)
+if(MSVC AND USE_MSVC_STATIC_RUNTIME AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 add_subdirectory(src)
 
 ###############################################################################
 # TESTING
 ###############################################################################
 
-# Enabling system level tests (Ctest)
-enable_testing()
-# Scheduling system level tests
-add_subdirectory(data/system_tests/percolator)
-add_subdirectory(tests/integration_tests/percolator)
-# Scheduling unit level tests
-if(NOT WITHOUT_GTEST)
-  add_subdirectory(tests/unit_tests/percolator)
+if(NOT NO_TESTS)
+  # Enabling system level tests (Ctest)
+  enable_testing()
+  # Scheduling system level tests
+  add_subdirectory(data/system_tests/percolator)
+  add_subdirectory(tests/integration_tests/percolator)
+  # Scheduling unit level tests
+  if(NOT WITHOUT_GTEST)
+    add_subdirectory(tests/unit_tests/percolator)
+  endif()
 endif()
 
 ###############################################################################
@@ -78,42 +106,21 @@ endif()
 ###############################################################################
 
 
-if( MINGW AND XML_SUPPORT )
-    message( STATUS "    Installing system-libraries: MinGW DLLs." )
-#    set( CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${MINGW_PATH}/bin/libgcc_s_sjlj-1.dll ${MINGW_PATH}/bin/libstdc++-6.dll ${MINGW_PATH}/bin/libxerces-c-3-1.dll ${MINGW_PATH}/bin/libboost_system.dll ${MINGW_PATH}/bin/libboost_filesystem.dll)
-    set( CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${MINGW_PATH}/bin/libxerces-c-3-1.dll)
-    include( InstallRequiredSystemLibraries )
-endif( MINGW AND XML_SUPPORT )
-
+# MSVC: install the redistributable DLLs, among them vcomp140.dll (OpenMP),
+# next to the executables, which makes the installed bin directory portable.
 if( MSVC )
   set( CMAKE_INSTALL_OPENMP_LIBRARIES TRUE )
-  if ( XML_SUPPORT )
-    message( STATUS "    Installing system-libraries: Win32 DLLs." )
-    # TODO: Some hacking is needed to install the .dll instead of the .lib. CMake plans to include these DLL variables in the future
-    string(REPLACE "xerces-c_3.lib" "../bin/xerces-c_3_1.dll;" XERCESC_DLL_LIBRARIES ${XERCESC_LIBRARIES})
-    message( STATUS "      Installing Xerces DLL: ${XERCESC_DLL_LIBRARIES}")
-    set( CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS ${XERCESC_DLL_LIBRARIES} )
-  endif ( XML_SUPPORT )
   include( InstallRequiredSystemLibraries )
 endif( MSVC )
 
-install(FILES src/xml/percolator_in.xsd DESTINATION ${XML_REL_PATH}/${PIN_SCHEMA_LOCATION} PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
-install(FILES src/xml/percolator_out.xsd DESTINATION ${XML_REL_PATH}/${POUT_SCHEMA_LOCATION} PERMISSIONS OWNER_READ GROUP_READ WORLD_READ)
 
 # ###############################################################################
 # # PACKAGING
 # ###############################################################################
 # # PACKAGING OPTIONS: GENERAL
-if(NOT XML_SUPPORT)
-  set(NICKNAME_SUFFIX "-noxml")
-endif()
 set(PACKAGE_NICKNAME "percolator${NICKNAME_SUFFIX}")
 
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Percolator and qvality, two post processors for shotgun proteomics data.")
 include("CPack.txt")
-
-set(CPACK_RPM_PACKAGE_DEPENDS "${CPACK_RPM_PACKAGE_DEPENDS} libc6, libgcc1")
-
-
 
 include(CPack)

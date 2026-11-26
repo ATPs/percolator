@@ -2,13 +2,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#include <boost/filesystem.hpp>
 #include <zlib.h>
 
 #include "MyException.h"
@@ -155,13 +155,14 @@ bool wildcardMatch(const std::string& pattern, const std::string& text) {
   return wildcardMatch(pattern, 0, text, 0);
 }
 
-void expandPathPattern(const boost::filesystem::path& currentPath,
+namespace fs = std::filesystem;
+
+void expandPathPattern(const fs::path& currentPath,
                        const std::vector<std::string>& segments,
                        size_t segmentIndex,
                        std::vector<std::string>& matches) {
   if (segmentIndex == segments.size()) {
-    if (boost::filesystem::exists(currentPath) &&
-        !boost::filesystem::is_directory(currentPath)) {
+    if (fs::exists(currentPath) && !fs::is_directory(currentPath)) {
       matches.push_back(currentPath.string());
     }
     return;
@@ -184,24 +185,20 @@ void expandPathPattern(const boost::filesystem::path& currentPath,
     return;
   }
 
-  if (!boost::filesystem::exists(currentPath) ||
-      !boost::filesystem::is_directory(currentPath)) {
+  if (!fs::exists(currentPath) || !fs::is_directory(currentPath)) {
     return;
   }
 
-  std::vector<boost::filesystem::path> candidates;
-  for (boost::filesystem::directory_iterator it(currentPath), end; it != end;
-       ++it) {
-    candidates.push_back(it->path());
+  std::vector<fs::path> candidates;
+  for (const fs::directory_entry& entry : fs::directory_iterator(currentPath)) {
+    candidates.push_back(entry.path());
   }
   std::sort(candidates.begin(), candidates.end(),
-            [](const boost::filesystem::path& lhs,
-               const boost::filesystem::path& rhs) {
+            [](const fs::path& lhs, const fs::path& rhs) {
               return lhs.filename().string() < rhs.filename().string();
             });
 
-  for (std::vector<boost::filesystem::path>::const_iterator it =
-           candidates.begin();
+  for (std::vector<fs::path>::const_iterator it = candidates.begin();
        it != candidates.end(); ++it) {
     if (wildcardMatch(segment, it->filename().string())) {
       expandPathPattern(*it, segments, segmentIndex + 1, matches);
@@ -210,16 +207,15 @@ void expandPathPattern(const boost::filesystem::path& currentPath,
 }
 
 std::vector<std::string> expandSinglePattern(const std::string& pattern) {
-  boost::filesystem::path inputPath(pattern);
-  boost::filesystem::path base =
-      inputPath.is_absolute() ? inputPath.root_path()
-                              : boost::filesystem::current_path();
-  boost::filesystem::path relative =
+  fs::path inputPath(pattern);
+  fs::path base =
+      inputPath.is_absolute() ? inputPath.root_path() : fs::current_path();
+  fs::path relative =
       inputPath.is_absolute() ? inputPath.relative_path() : inputPath;
 
   std::vector<std::string> segments;
-  for (boost::filesystem::path::const_iterator it = relative.begin();
-       it != relative.end(); ++it) {
+  for (fs::path::const_iterator it = relative.begin(); it != relative.end();
+       ++it) {
     segments.push_back(it->string());
   }
 
@@ -281,9 +277,7 @@ std::vector<std::string> InputFileResolver::deduplicateKeepFirst(
   std::vector<std::string> uniquePaths;
   for (std::vector<std::string>::const_iterator it = paths.begin();
        it != paths.end(); ++it) {
-    boost::filesystem::path normalizedPath =
-        boost::filesystem::absolute(boost::filesystem::path(*it))
-            .lexically_normal();
+    fs::path normalizedPath = fs::absolute(fs::path(*it)).lexically_normal();
     std::string key = normalizedPath.string();
     if (seen.insert(key).second) {
       uniquePaths.push_back(*it);
@@ -314,7 +308,12 @@ std::vector<std::string> InputFileResolver::materializeGzipInputs(
 
     std::string tempFilePath;
     std::string tempDirPath;
-    TmpDir::createTempFile(tempFilePath, tempDirPath);
+    try {
+      TmpDir::createTempFile(tempFilePath, tempDirPath);
+    } catch (...) {
+      gzclose(inputFile);
+      throw;
+    }
     std::ofstream outputFile(tempFilePath.c_str(), std::ios::binary);
     if (!outputFile.is_open()) {
       gzclose(inputFile);
@@ -339,19 +338,30 @@ std::vector<std::string> InputFileResolver::materializeGzipInputs(
 
     if (bytesRead < 0) {
       int errorNumber = Z_OK;
-      const char* errorMessage = gzerror(inputFile, &errorNumber);
+      const char* message = gzerror(inputFile, &errorNumber);
+      const std::string errorMessage = message ? message : "";
       gzclose(inputFile);
       outputFile.close();
       std::ostringstream msg;
       msg << "ERROR: failed to decompress " << *it;
-      if (errorMessage != NULL) {
+      if (!errorMessage.empty()) {
         msg << " (" << errorMessage << ")";
       }
       throw MyException(msg.str());
     }
 
-    gzclose(inputFile);
+    int errorNumber = Z_OK;
+    const char* message = gzerror(inputFile, &errorNumber);
+    const std::string errorMessage = message ? message : "";
+    const int closeResult = gzclose(inputFile);
     outputFile.close();
+    if (errorNumber != Z_OK && errorNumber != Z_STREAM_END) {
+      throw MyException("ERROR: failed to decompress " + *it + " (" +
+                        errorMessage + ")");
+    }
+    if (closeResult != Z_OK || !outputFile) {
+      throw MyException("ERROR: could not finish decompressing " + *it);
+    }
     resolved.push_back(tempFilePath);
   }
 

@@ -17,33 +17,49 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <fstream>
+#include <random>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
-
-#include <boost/filesystem.hpp>
 
 #include "PerInputOutputPlanner.h"
 
 namespace {
 
+namespace fs = std::filesystem;
+
+fs::path makeUniqueTempDir(const std::string& prefix) {
+  static std::mt19937_64 generator(std::random_device{}());
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    fs::path path = fs::temp_directory_path() /
+                    (prefix + std::to_string(generator()));
+    std::error_code error;
+    if (fs::create_directory(path, error)) {
+      return path;
+    }
+  }
+  throw std::runtime_error("Could not create a unique temporary directory");
+}
+
 class ScopedTempDir {
  public:
-  ScopedTempDir() {
-    path_ = boost::filesystem::temp_directory_path() /
-            boost::filesystem::unique_path("percolator-output-plan-%%%%-%%%%");
-    boost::filesystem::create_directories(path_);
+  ScopedTempDir() : path_(makeUniqueTempDir("percolator-output-plan-")) {}
+
+  ~ScopedTempDir() {
+    std::error_code error;
+    fs::remove_all(path_, error);
   }
 
-  ~ScopedTempDir() { boost::filesystem::remove_all(path_); }
-
-  boost::filesystem::path path() const { return path_; }
+  fs::path path() const { return path_; }
 
  private:
-  boost::filesystem::path path_;
+  fs::path path_;
 };
 
-void writeText(const boost::filesystem::path& path, const std::string& text) {
+void writeText(const fs::path& path, const std::string& text) {
   std::ofstream out(path.string().c_str());
   ASSERT_TRUE(out.is_open());
   out << text;
@@ -54,7 +70,7 @@ void writeText(const boost::filesystem::path& path, const std::string& text) {
 
 TEST(PerInputOutputPlannerTest, BuildEntriesGeneratesUniquePrefixes) {
   ScopedTempDir tempDir;
-  boost::filesystem::create_directories(tempDir.path() / "sub");
+  std::filesystem::create_directories(tempDir.path() / "sub");
   writeText(tempDir.path() / "dup.pin", "x");
   writeText(tempDir.path() / "sub" / "dup.pin.gz", "x");
 
@@ -77,20 +93,20 @@ TEST(PerInputOutputPlannerTest, BuildEntriesGeneratesUniquePrefixes) {
 
 TEST(PerInputOutputPlannerTest, EnsureOutputFolderCreatesDirectory) {
   ScopedTempDir tempDir;
-  boost::filesystem::path outputDir = tempDir.path() / "results" / "nested";
+  fs::path outputDir = tempDir.path() / "results" / "nested";
 
   bool created = false;
   std::string error;
   ASSERT_TRUE(PerInputOutputPlanner::ensureOutputFolder(outputDir.string(),
                                                         created, error));
   EXPECT_TRUE(created);
-  EXPECT_TRUE(boost::filesystem::exists(outputDir));
-  EXPECT_TRUE(boost::filesystem::is_directory(outputDir));
+  EXPECT_TRUE(std::filesystem::exists(outputDir));
+  EXPECT_TRUE(std::filesystem::is_directory(outputDir));
 }
 
 TEST(PerInputOutputPlannerTest, ReserveOutputFileCreatesDirectoryAndFile) {
   ScopedTempDir tempDir;
-  boost::filesystem::path outputDir = tempDir.path() / "results" / "weights";
+  fs::path outputDir = tempDir.path() / "results" / "weights";
 
   bool createdDir = false;
   std::string outputPath;
@@ -100,14 +116,14 @@ TEST(PerInputOutputPlannerTest, ReserveOutputFileCreatesDirectoryAndFile) {
       error));
   EXPECT_TRUE(createdDir);
   EXPECT_EQ((outputDir / "percolator.model.weights").string(), outputPath);
-  EXPECT_TRUE(boost::filesystem::exists(outputPath));
+  EXPECT_TRUE(std::filesystem::exists(outputPath));
 }
 
 TEST(PerInputOutputPlannerTest, ReserveOutputFileFailsWhenFileExists) {
   ScopedTempDir tempDir;
-  boost::filesystem::path outputDir = tempDir.path() / "results";
-  boost::filesystem::create_directories(outputDir);
-  boost::filesystem::path outputFile = outputDir / "percolator.model.weights";
+  fs::path outputDir = tempDir.path() / "results";
+  std::filesystem::create_directories(outputDir);
+  fs::path outputFile = outputDir / "percolator.model.weights";
   writeText(outputFile, "existing");
 
   bool createdDir = false;

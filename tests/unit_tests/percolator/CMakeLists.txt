@@ -1,30 +1,47 @@
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 
-include(FetchContent)
-
-if(WIN32)
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# =============================
+# Find or fetch GoogleTest
+# =============================
+# An installed GoogleTest (e.g. libgtest-dev or gtest-devel) is used when one
+# is found, so that configuring needs no network access. Otherwise GoogleTest
+# is downloaded with FetchContent. On MSVC an installed GoogleTest may use
+# another C runtime than percolator, so it is used only on request there.
+if(MSVC)
+  set(_use_system_gtest_default OFF)
+else()
+  set(_use_system_gtest_default ON)
+endif()
+option(USE_SYSTEM_GTEST "Use an installed GoogleTest if one is found"
+       ${_use_system_gtest_default})
+if(USE_SYSTEM_GTEST)
+  find_package(GTest CONFIG QUIET)
 endif()
 
-set(BUILD_SHARED_LIBS OFF)
+if(GTest_FOUND)
+  message(STATUS "Using GoogleTest ${GTest_VERSION} from ${GTest_DIR}")
+else()
+  message(STATUS "Fetching GoogleTest...")
+  include(FetchContent)
 
-# =============================
-# Fetch or find GoogleTest
-# =============================
-message(STATUS "Fetching GoogleTest...")
-set(BUILD_GTEST ON)
-set(INSTALL_GTEST OFF)
-set(BUILD_GMOCK OFF)
+  if(WIN32)
+    # GoogleTest then follows CMAKE_MSVC_RUNTIME_LIBRARY (set in the top
+    # CMakeLists.txt) instead of rewriting the compiler flags itself
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  endif()
 
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG v1.16.0
-)
-FetchContent_Populate(googletest)
+  set(BUILD_SHARED_LIBS OFF)
+  set(BUILD_GTEST ON)
+  set(INSTALL_GTEST OFF)
+  set(BUILD_GMOCK OFF)
 
-# This is the correct way to build the actual library
-add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.16.0
+  )
+  FetchContent_MakeAvailable(googletest)
+endif()
 
 # Optional: apply RTTI to gtest explicitly (not usually needed if add_compile_options is set globally)
 # target_compile_options(gtest PRIVATE -frtti)
@@ -34,45 +51,33 @@ enable_testing()
 include(GoogleTest)
 
 # =============================
-# Fetch or find Eigen3
-# =============================
-find_package(Eigen3 QUIET)
-if(NOT Eigen3_FOUND)
-    message(STATUS "Eigen3 not found, downloading it...")
-    FetchContent_Declare(
-      eigen
-      GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-      GIT_TAG 3.4.0
-    )
-    FetchContent_MakeAvailable(eigen)
-endif()
-
-# =============================
-# Find Boost
-# =============================
-find_package(Boost ${BOOST_MIN_VERSION} REQUIRED COMPONENTS filesystem system)
-add_definitions(-DBOOST_SYSTEM_NO_DEPRECATED)
-add_definitions(-DBOOST_ERROR_CODE_HEADER_ONLY)
-if(WIN32)
-    add_definitions(-DBOOST_ALL_NO_LIB)
-endif()
-
-# =============================
 # Add test executable
 # =============================
 add_executable(gtest_unit
     Unit_tests_Percolator_main.cpp
+    UnitTest_Percolator_BlasLevel1.cpp
+    UnitTest_Percolator_InputFileResolver.cpp
+    UnitTest_Percolator_PerInputOutputPlanner.cpp
+    UnitTest_Percolator_TmpDir.cpp
+    UnitTest_Percolator_ValidateTabFile.cpp
     UnitTest_Percolator_Option.cpp
     UnitTest_Percolator_TabReader.cpp
     UnitTest_Percolator_SetHandler.cpp
-    UnitTest_Percolator_InputFileResolver.cpp
-    UnitTest_Percolator_TmpDir.cpp
-    UnitTest_Percolator_PerInputOutputPlanner.cpp
-    UnitTest_Percolator_ValidateTabFile.cpp
     UnitTest_Percolator_DataSet.cpp
     UnitTest_Percolator_IsplineRegression.cpp
+    UnitTest_Percolator_InferPep.cpp
     UnitTest_Percolator_Scores.cpp
     UnitTest_Percolator_CrossValidation.cpp
+    UnitTest_Percolator_Normalizer.cpp
+    UnitTest_Percolator_PSMDescription.cpp
+    UnitTest_Percolator_PosteriorEstimator.cpp
+    UnitTest_Percolator_SanityCheck.cpp
+    UnitTest_Percolator_Caller.cpp
+    UnitTest_Percolator_CompositionSorter.cpp
+    UnitTest_Percolator_TrainingMemory.cpp
+    UnitTest_Percolator_ParallelSort.cpp
+    UnitTest_Percolator_OpenMPHelpers.cpp
+    UnitTest_Percolator_ProteinDigest.cpp
 )
 
 # =============================
@@ -80,8 +85,8 @@ add_executable(gtest_unit
 # =============================
 target_include_directories(gtest_unit
   PRIVATE
-    ${Boost_INCLUDE_DIRS}
     ${PERCOLATOR_SOURCE_DIR}/src
+    ${PERCOLATOR_SOURCE_DIR}/src/picked_protein
     ${CMAKE_BINARY_DIR}/src
 )
 
@@ -92,28 +97,20 @@ target_link_libraries(gtest_unit
   PRIVATE
     GTest::gtest
     GTest::gtest_main
-    Eigen3::Eigen
     perclibrary
-    dblas
-    Boost::filesystem
-    Boost::system
+    picked_protein
 )
-if(NOT WIN32)
-  target_link_libraries(gtest_unit PRIVATE pthread)
-endif()
-
-# (Optional: if you want coverage)
-if(COVERAGE)
-    target_compile_options(gtest_unit PRIVATE -ftest-coverage -fprofile-arcs)
-    target_link_options(gtest_unit PRIVATE -ftest-coverage -fprofile-arcs)
-endif()
+# GoogleTest needs the threads library; percolator itself uses OpenMP only
+find_package(Threads REQUIRED)
+target_link_libraries(gtest_unit PRIVATE Threads::Threads)
 
 # =============================
 # Enable test
 # =============================
 add_test(NAME UnitTest_Percolator_RunAllTests COMMAND gtest_unit)
-
-# =============================
-# Install
-# =============================
-install(TARGETS gtest_unit EXPORT PERCOLATOR DESTINATION ./bin)
+# Idle OpenMP threads sleep instead of spinning (the default of libgomp is to
+# spin for a while). Alone this makes no difference; when the machine is busy,
+# e.g. two test runs at once, the spinning threads take the cores from the
+# working ones and the tests take several times longer.
+set_tests_properties(UnitTest_Percolator_RunAllTests PROPERTIES
+                     ENVIRONMENT "OMP_WAIT_POLICY=passive")

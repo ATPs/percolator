@@ -1,18 +1,23 @@
 #ifndef TMPDIR_H_
 #define TMPDIR_H_
 
-#include <boost/filesystem.hpp>
-#include <iostream>
 #include <string>
 
-class TmpDir {       
-  public:             
-    void static setTempRoot(const std::string& tempRoot);
-    void static createTempFile(std::string& tcf, std::string& tcd);
-    void static cleanupAll();
+// Owns a unique directory and removes its contents on destruction.
+class TmpDir {
+ public:
+  TmpDir();
+  ~TmpDir();
+  TmpDir(const TmpDir&) = delete;
+  TmpDir& operator=(const TmpDir&) = delete;
 
-  private:
-    void static registerForCleanup(const std::string& tempDir);
+  const std::string& getPath() const { return path_; }
+  static void setTempRoot(const std::string& tempRoot);
+  static void createTempFile(std::string& file, std::string& directory);
+  static void cleanupAll();
+
+ private:
+  std::string path_;
 };
 
 #endif  // TMPDIR_H_

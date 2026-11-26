@@ -1,6 +1,10 @@
+build/
+.vscode/
+dist/
+wheelhouse/
+build-conda/
 bin/
 bin-static/
 bin-*/
-build/
 build-*/
 notes/

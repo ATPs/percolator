@@ -40,12 +40,8 @@ limitations under the License.
 #include "SanityCheck.h"
 #include "Scores.h"
 #include "SetHandler.h"
-#include "XMLInterface.h"
 
-#define NO_BOOST_DATE_TIME_INLINE
 #include <algorithm>
-#include <boost/asio.hpp>
-#include <boost/functional/hash_fwd.hpp>
 
 /*
  * Main class that starts and controls the calculations.
@@ -60,16 +56,30 @@ class Caller {
   Caller();
   virtual ~Caller();
 
+  // Sets the process-wide settings that the options and the steps of a run
+  // change (verbosity, --no-terminate, random seed, PEP method, protein
+  // inference, protein separator, spectrum file names, feature names,
+  // warnings given once) back to their initial values. The constructor
+  // calls it; a run leaves its settings behind, so code that goes on after
+  // a run and reads them, like the unit tests, calls it as well.
+  static void resetProcessSettings();
+
   static string greeter();
   string extendedGreeter();
   bool parseOptions(int argc, char** argv);
   int run();
 
  protected:
-  Normalizer* pNorm_;
-  SanityCheck* pCheck_;
-  ProteinProbEstimator* protEstimator_;
-  Enzyme* enzyme_;
+  std::unique_ptr<Normalizer> pNorm_;
+  int normalizerType_ = Normalizer::STDV;
+  SanityCheck check_;
+  std::unique_ptr<ProteinProbEstimator> protEstimator_;
+  std::unique_ptr<Enzyme> enzyme_;
+  // holds the concatenation of multiple input files, removed at the end
+
+  // --version or --help was given: parseOptions printed it and run does
+  // nothing
+  bool nothingToRun_ = false;
 
   struct PerInputOutputSpec {
     std::string sourceKey;
@@ -81,19 +91,16 @@ class Caller {
   };
 
   // file input parameters
-  bool tabInput_;
   bool readStdIn_;
   std::string inputFN_;
   std::vector<std::string> inputFNs_;
-  bool xmlSchemaValidation_;
   std::string protEstimatorDecoyPrefix_;
 
   // file output parameters
-  std::string tabOutputFN_, xmlOutputFN_, pepXMLOutputFN_;
+  std::string tabOutputFN_;
   std::string weightOutputFN_;
   std::string psmResultFN_, peptideResultFN_, proteinResultFN_;
   std::string decoyPsmResultFN_, decoyPeptideResultFN_, decoyProteinResultFN_;
-  bool xmlPrintDecoys_, xmlPrintExpMass_;
   bool outputRT_ = false;
 
   // per-input output mode
@@ -105,25 +112,21 @@ class Caller {
   bool outputEachTargetPeptides_;
   bool outputEachDecoyPeptides_;
   bool outputEachExtraTab_;
-  bool outputEachExtraXml_;
-  bool outputEachExtraPepXml_;
   bool outputEachExtraWeight_;
   bool outputEachExtraProtein_;
   bool outputEachExtraDecoyProtein_;
   std::string tabOutputTemplateFN_;
-  std::string xmlOutputTemplateFN_;
-  std::string pepXMLOutputTemplateFN_;
   std::string weightOutputTemplateFN_;
   std::string proteinResultTemplateFN_;
   std::string decoyProteinResultTemplateFN_;
   std::vector<std::string> resolvedInputOriginalFNs_;
+  std::vector<std::pair<std::string, std::string>> protectedInputFiles_;
   std::vector<PerInputOutputSpec> perInputOutputSpecs_;
   std::string sourceTagDelimiter_;
   bool useMixMaxBase_;
 
   // report level parameters
   bool reportUniquePeptides_;
-  bool reportPepXML_;
   bool targetDecoyCompetition_;
   bool useMixMax_;
   std::string inputSearchType_;
@@ -131,10 +134,24 @@ class Caller {
   // SVM / cross validation parameters
   double selectionFdr_, initialSelectionFdr_, testFdr_;
   unsigned int numIterations_, maxPSMs_, nestedXvalBins_, numThreads_;
+  static constexpr unsigned int kDefaultNumFolds = 3u;
+  unsigned int numFolds_ = kDefaultNumFolds;  // --num-folds
+  bool numFoldsSet_ = false;    // --num-folds given
+  unsigned int foldsInMemory_ = 0u;  // --folds-in-memory, 0: by --num-folds
   double selectedCpos_, selectedCneg_;
+  bool classicTraining_ = false;
+  bool inPlaceTraining_ = false;
+  // The merge of the cross-validation bins as the options give it:
+  // --merge-normalization (scheme, and secondChanceScheme where given) and
+  // --static (skipNormalizeScores). run() completes it.
+  MergePlan mergePlan_;
+  // a scheme was given, or set by --direction-check pooled; otherwise run()
+  // takes CrossValidation::defaultMergeNormalization of the folds
+  bool mergeNormalizationSet_ = false;
   bool reportEachIteration_, quickValidation_, trainBestPositive_,
-      skipNormalizeScores_, analytics_, useResetAlgorithm_,
-      useCompositionMatch_, useIrlsPep_, useInterpolatingPep_, usePavaPep_;
+      useResetAlgorithm_,
+      useCompositionMatch_, useIrlsPep_, useInterpolatingPep_, usePavaPep_,
+      useTdcPep_;
 
   // reporting parameters
   std::string call_;
@@ -142,18 +159,22 @@ class Caller {
   Timer timer;
 
   std::istream& getDataInStream(std::ifstream& fileStream);
+  void warnAboutSeveralCandidates(const SetHandler& setHandler) const;
   bool loadAndNormalizeData(std::istream& dataStream,
-                            XMLInterface& xmlInterface,
                             SetHandler& setHandler,
                             Scores& allScores);
   int runCore();
-  void calcAndOutputResult(Scores& allScores, XMLInterface& xmlInterface);
+  void calcAndOutputResult(Scores& allScores);
 
   void calculatePSMProb(Scores& allScores, bool uniquePeptideRun);
   void writePerInputResults(Scores& allScores, bool unique);
   void writeResults(Scores& allScores, bool unique, bool writeOutput);
   void calculateProteinProbabilities(Scores& allScores);
   void checkIsWritable(const std::string& filePath);
+  // inputFiles holds (description, file name) pairs
+  void checkOutputFiles(
+      const std::vector<std::pair<std::string, std::string> >& inputFiles)
+      const;
 };
 
 #endif /*CALLER_H_*/
